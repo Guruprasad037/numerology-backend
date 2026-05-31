@@ -1,10 +1,9 @@
 require('dotenv').config();
-const express    = require('express');
-const cors       = require('cors');
-const crypto     = require('crypto');
-const Razorpay   = require('razorpay');
-const sqlite3    = require('sqlite3').verbose();
-const path       = require('path');
+const express  = require('express');
+const cors     = require('cors');
+const crypto   = require('crypto');
+const Razorpay = require('razorpay');
+const { Pool } = require('pg');
 
 const app = express();
 
@@ -14,53 +13,41 @@ const razorpay = new Razorpay({
   key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
 
-// ── SQLite DB ────────────────────────────────────
-const db = new sqlite3.Database(path.join(__dirname, 'numerosoul.db'));
-
-db.serialize(() => {
-  db.run(`
-    CREATE TABLE IF NOT EXISTS orders (
-      id            INTEGER PRIMARY KEY AUTOINCREMENT,
-      created_at    TEXT    DEFAULT (datetime('now','localtime')),
-      name          TEXT NOT NULL,
-      email         TEXT NOT NULL,
-      dob           TEXT NOT NULL,
-      product_id    TEXT NOT NULL,
-      product_name  TEXT NOT NULL,
-      amount_paise  INTEGER NOT NULL,
-      rp_order_id   TEXT UNIQUE,
-      rp_payment_id TEXT,
-      rp_signature  TEXT,
-      status        TEXT DEFAULT 'pending_payment',
-      notes         TEXT DEFAULT ''
-    )
-  `);
+// ── PostgreSQL DB ────────────────────────────────
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false },
 });
 
-// Helper: promisify db.run and db.all
-function dbRun(sql, params) {
-  return new Promise((resolve, reject) => {
-    db.run(sql, params, function(err) {
-      if (err) reject(err);
-      else resolve(this);
-    });
-  });
+pool.query(`
+  CREATE TABLE IF NOT EXISTS orders (
+    id            SERIAL PRIMARY KEY,
+    created_at    TIMESTAMP DEFAULT NOW(),
+    name          TEXT NOT NULL,
+    email         TEXT NOT NULL,
+    dob           TEXT NOT NULL,
+    product_id    TEXT NOT NULL,
+    product_name  TEXT NOT NULL,
+    amount_paise  INTEGER NOT NULL,
+    rp_order_id   TEXT UNIQUE,
+    rp_payment_id TEXT,
+    rp_signature  TEXT,
+    status        TEXT DEFAULT 'pending_payment',
+    notes         TEXT DEFAULT ''
+  )
+`).then(() => console.log('DB ready ✦')).catch(console.error);
+
+// ── DB Helpers ───────────────────────────────────
+async function dbRun(sql, params) {
+  return pool.query(sql, params);
 }
-function dbAll(sql, params) {
-  return new Promise((resolve, reject) => {
-    db.all(sql, params, (err, rows) => {
-      if (err) reject(err);
-      else resolve(rows);
-    });
-  });
+async function dbAll(sql, params) {
+  const result = await pool.query(sql, params);
+  return result.rows;
 }
-function dbGet(sql, params) {
-  return new Promise((resolve, reject) => {
-    db.get(sql, params, (err, row) => {
-      if (err) reject(err);
-      else resolve(row);
-    });
-  });
+async function dbGet(sql, params) {
+  const result = await pool.query(sql, params);
+  return result.rows[0];
 }
 
 // ── Middleware ───────────────────────────────────
@@ -122,7 +109,7 @@ const PRODUCTS = {
 
 app.get('/', (req, res) => res.send('NumeroSoul backend running ✦'));
 
-// ── Free reading (dummy) ─────────────────────────
+// ── Free reading ─────────────────────────────────
 app.post('/reading', (req, res) => {
   const { name, dob } = req.body;
   if (!name || !dob) return res.status(400).json({ error: 'Name and date of birth are required.' });
@@ -149,7 +136,7 @@ app.post('/orders/create', async (req, res) => {
 
     await dbRun(
       `INSERT INTO orders (name,email,dob,product_id,product_name,amount_paise,rp_order_id,status)
-       VALUES (?,?,?,?,?,?,?,'pending_payment')`,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,'pending_payment')`,
       [name, email, dob, product_id, product.name, product.amount_paise, rp_order.id]
     );
 
@@ -181,7 +168,7 @@ app.post('/webhook/razorpay', async (req, res) => {
   if (event.event === 'payment.captured') {
     const payment = event.payload.payment.entity;
     await dbRun(
-      `UPDATE orders SET status='paid', rp_payment_id=?, rp_signature=? WHERE rp_order_id=?`,
+      `UPDATE orders SET status='paid', rp_payment_id=$1, rp_signature=$2 WHERE rp_order_id=$3`,
       [payment.id, signature, payment.order_id]
     );
     console.log(`✦ Payment captured: ${payment.order_id}`);
@@ -193,14 +180,14 @@ app.post('/webhook/razorpay', async (req, res) => {
 app.get('/admin/orders', requireAdmin, async (req, res) => {
   const { status } = req.query;
   const rows = status && status !== 'all'
-    ? await dbAll(`SELECT * FROM orders WHERE status=? ORDER BY created_at DESC`, [status])
+    ? await dbAll(`SELECT * FROM orders WHERE status=$1 ORDER BY created_at DESC`, [status])
     : await dbAll(`SELECT * FROM orders ORDER BY created_at DESC`, []);
   res.json(rows);
 });
 
 // ── Admin: single order ──────────────────────────
 app.get('/admin/orders/:id', requireAdmin, async (req, res) => {
-  const row = await dbGet(`SELECT * FROM orders WHERE id=?`, [req.params.id]);
+  const row = await dbGet(`SELECT * FROM orders WHERE id=$1`, [req.params.id]);
   if (!row) return res.status(404).json({ error: 'Order not found' });
   res.json(row);
 });
@@ -208,7 +195,7 @@ app.get('/admin/orders/:id', requireAdmin, async (req, res) => {
 // ── Admin: mark report sent ──────────────────────
 app.post('/admin/orders/:id/complete', requireAdmin, async (req, res) => {
   const { notes } = req.body;
-  await dbRun(`UPDATE orders SET status='report_sent', notes=? WHERE id=?`, [notes||'', req.params.id]);
+  await dbRun(`UPDATE orders SET status='report_sent', notes=$1 WHERE id=$2`, [notes||'', req.params.id]);
   res.json({ success: true });
 });
 

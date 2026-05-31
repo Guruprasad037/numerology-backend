@@ -1,14 +1,9 @@
-// ═══════════════════════════════════════════════════
-//  NumeroSoul — Backend  (server.js)
-//  Stack: Express + better-sqlite3 + Razorpay
-// ═══════════════════════════════════════════════════
-
 require('dotenv').config();
 const express    = require('express');
 const cors       = require('cors');
 const crypto     = require('crypto');
 const Razorpay   = require('razorpay');
-const Database   = require('better-sqlite3');
+const sqlite3    = require('sqlite3').verbose();
 const path       = require('path');
 
 const app = express();
@@ -19,46 +14,61 @@ const razorpay = new Razorpay({
   key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
 
-// ── SQLite DB (single file, auto-created) ────────
-const db = new Database(path.join(__dirname, 'numerosoul.db'));
+// ── SQLite DB ────────────────────────────────────
+const db = new sqlite3.Database(path.join(__dirname, 'numerosoul.db'));
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS orders (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    created_at    TEXT    DEFAULT (datetime('now','localtime')),
+db.serialize(() => {
+  db.run(`
+    CREATE TABLE IF NOT EXISTS orders (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      created_at    TEXT    DEFAULT (datetime('now','localtime')),
+      name          TEXT NOT NULL,
+      email         TEXT NOT NULL,
+      dob           TEXT NOT NULL,
+      product_id    TEXT NOT NULL,
+      product_name  TEXT NOT NULL,
+      amount_paise  INTEGER NOT NULL,
+      rp_order_id   TEXT UNIQUE,
+      rp_payment_id TEXT,
+      rp_signature  TEXT,
+      status        TEXT DEFAULT 'pending_payment',
+      notes         TEXT DEFAULT ''
+    )
+  `);
+});
 
-    -- customer
-    name          TEXT NOT NULL,
-    email         TEXT NOT NULL,
-    dob           TEXT NOT NULL,
-
-    -- product
-    product_id    TEXT NOT NULL,   -- e.g. 'career', 'love', 'blueprint', 'health'
-    product_name  TEXT NOT NULL,
-    amount_paise  INTEGER NOT NULL,
-
-    -- razorpay
-    rp_order_id   TEXT UNIQUE,
-    rp_payment_id TEXT,
-    rp_signature  TEXT,
-
-    -- fulfilment
-    status        TEXT DEFAULT 'pending_payment',
-    -- pending_payment → paid → report_sent
-    notes         TEXT DEFAULT ''
-  );
-`);
+// Helper: promisify db.run and db.all
+function dbRun(sql, params) {
+  return new Promise((resolve, reject) => {
+    db.run(sql, params, function(err) {
+      if (err) reject(err);
+      else resolve(this);
+    });
+  });
+}
+function dbAll(sql, params) {
+  return new Promise((resolve, reject) => {
+    db.all(sql, params, (err, rows) => {
+      if (err) reject(err);
+      else resolve(rows);
+    });
+  });
+}
+function dbGet(sql, params) {
+  return new Promise((resolve, reject) => {
+    db.get(sql, params, (err, row) => {
+      if (err) reject(err);
+      else resolve(row);
+    });
+  });
+}
 
 // ── Middleware ───────────────────────────────────
 app.use(cors({ origin: '*' }));
-
-// Raw body for Razorpay webhook signature verification
 app.use('/webhook/razorpay', express.raw({ type: 'application/json' }));
-
-// JSON for everything else
 app.use(express.json());
 
-// ── Admin auth middleware ────────────────────────
+// ── Admin auth ───────────────────────────────────
 function requireAdmin(req, res, next) {
   const token = req.headers['x-admin-token'] || req.query.token;
   if (token && token === process.env.ADMIN_TOKEN) return next();
@@ -68,32 +78,25 @@ function requireAdmin(req, res, next) {
 // ════════════════════════════════════════════════
 //  NUMEROLOGY HELPERS
 // ════════════════════════════════════════════════
-
 function reduceToSingle(n) {
-  while (n > 9) {
-    n = String(n).split('').reduce((s, d) => s + parseInt(d), 0);
-  }
+  while (n > 9) n = String(n).split('').reduce((s, d) => s + parseInt(d), 0);
   return n;
 }
-
 function calcBirthNum(dob) {
   const digits = dob.replace(/-/g, '').split('').map(Number);
   return reduceToSingle(digits.reduce((a, b) => a + b, 0));
 }
-
 function calcDestinyNum(name) {
   const val = name.toUpperCase().replace(/[^A-Z]/g, '')
     .split('').reduce((s, c) => s + (c.charCodeAt(0) - 64), 0);
   return reduceToSingle(val);
 }
-
 function formatDob(dob) {
   const [y, m, d] = dob.split('-');
   const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   return `${parseInt(d)} ${months[parseInt(m)-1]} ${y}`;
 }
 
-// Dummy readings — swap these out for Claude calls later
 const READINGS = {
   1: { traits: ['Leader','Independent','Ambitious','Pioneering','Determined'], text: `You carry the energy of new beginnings and self-reliance. Number 1 is the number of the pioneer — you are here to lead, to initiate, and to carve your own path where none existed before.\n\nYou think independently and trust your own instincts above all else. While others may seek consensus, you are comfortable standing alone when you know you are right. This strength is your greatest gift.\n\nYour challenge is learning to collaborate without feeling diminished. True leadership inspires rather than insists. Channel your ambition into vision, and others will follow naturally.` },
   2: { traits: ['Diplomatic','Sensitive','Cooperative','Intuitive','Peacemaker'], text: `You are the soul of sensitivity and connection. Number 2 governs partnerships, balance, and the quiet power of listening — the kind of power most people overlook.\n\nYou read rooms effortlessly. You sense what others feel before they say it. This intuition is a rare gift, and it draws people to you for comfort and counsel.\n\nYour journey is about learning to honour your own needs as deeply as you honour others'. Your peace cannot come only from keeping the peace around you. Find the still centre within, and you become unshakeable.` },
@@ -106,90 +109,49 @@ const READINGS = {
   9: { traits: ['Compassionate','Wise','Idealistic','Generous','Old Soul'], text: `You carry the wisdom of completion. Number 9 is the number of the old soul — someone who has gathered lifetimes of experience and feels a deep responsibility to give back.\n\nYou see the humanity in every situation. You forgive more readily than most. You are drawn to causes larger than yourself, and when you find yours, you pursue it with quiet, unwavering devotion.\n\nYour challenge is release. You hold on — to people, to grief, to what should have been. Your greatest freedom will come the moment you learn that letting go is not loss. It is how you make room for everything that is still coming.` },
 };
 
-// ── Products catalogue ───────────────────────────
-// Add / change prices here — one place only.
 const PRODUCTS = {
-  career: {
-    id:          'career',
-    name:        'Career & Wealth Report',
-    amount_paise: 59900,      // ₹599 in paise
-    description: 'Career paths, wealth number & abundance cycles',
-  },
-  love: {
-    id:          'love',
-    name:        'Love & Relationships Report',
-    amount_paise: 59900,
-    description: 'Love number, compatibility & relationship timing',
-  },
-  blueprint: {
-    id:          'blueprint',
-    name:        'Full Life Blueprint',
-    amount_paise: 99900,      // ₹999
-    description: 'Complete 15-page numerology report',
-  },
-  health: {
-    id:          'health',
-    name:        'Health & Wellbeing Report',
-    amount_paise: 49900,      // ₹499
-    description: 'Energy patterns, stress cycles & wellness rhythms',
-  },
+  career:    { id:'career',    name:'Career & Wealth Report',        amount_paise:59900 },
+  love:      { id:'love',      name:'Love & Relationships Report',   amount_paise:59900 },
+  blueprint: { id:'blueprint', name:'Full Life Blueprint',           amount_paise:99900 },
+  health:    { id:'health',    name:'Health & Wellbeing Report',     amount_paise:49900 },
 };
 
 // ════════════════════════════════════════════════
 //  ROUTES
 // ════════════════════════════════════════════════
 
-// ── Health check ─────────────────────────────────
-app.get('/', (req, res) => {
-  res.send('NumeroSoul backend running ✦');
-});
+app.get('/', (req, res) => res.send('NumeroSoul backend running ✦'));
 
-// ── FREE READING ─────────────────────────────────
-// Returns dummy data for now; swap for Claude later
+// ── Free reading (dummy) ─────────────────────────
 app.post('/reading', (req, res) => {
   const { name, dob } = req.body;
   if (!name || !dob) return res.status(400).json({ error: 'Name and date of birth are required.' });
-
-  const birth_num    = calcBirthNum(dob);
-  const destiny_num  = calcDestinyNum(name);
-  const reading_data = READINGS[birth_num] || READINGS[1];
-
-  res.json({
-    name,
-    dob_fmt:    formatDob(dob),
-    birth_num,
-    destiny_num,
-    traits:     reading_data.traits,
-    reading:    reading_data.text,
-  });
+  const birth_num   = calcBirthNum(dob);
+  const destiny_num = calcDestinyNum(name);
+  const data        = READINGS[birth_num] || READINGS[1];
+  res.json({ name, dob_fmt: formatDob(dob), birth_num, destiny_num, traits: data.traits, reading: data.text });
 });
 
-// ── CREATE RAZORPAY ORDER ─────────────────────────
-// Called by the frontend when customer clicks "Get Report"
-// Returns a Razorpay order_id that the frontend uses to open the payment modal
+// ── Create Razorpay order ────────────────────────
 app.post('/orders/create', async (req, res) => {
   const { product_id, name, email, dob } = req.body;
-
-  if (!product_id || !name || !email || !dob) {
+  if (!product_id || !name || !email || !dob)
     return res.status(400).json({ error: 'product_id, name, email and dob are required.' });
-  }
 
   const product = PRODUCTS[product_id];
   if (!product) return res.status(400).json({ error: 'Unknown product.' });
 
   try {
     const rp_order = await razorpay.orders.create({
-      amount:   product.amount_paise,
-      currency: 'INR',
+      amount: product.amount_paise, currency: 'INR',
       notes: { name, email, dob, product_id },
     });
 
-    // Save a pending_payment row — gets updated when webhook fires
-    const stmt = db.prepare(`
-      INSERT INTO orders (name, email, dob, product_id, product_name, amount_paise, rp_order_id, status)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 'pending_payment')
-    `);
-    stmt.run(name, email, dob, product_id, product.name, product.amount_paise, rp_order.id);
+    await dbRun(
+      `INSERT INTO orders (name,email,dob,product_id,product_name,amount_paise,rp_order_id,status)
+       VALUES (?,?,?,?,?,?,?,'pending_payment')`,
+      [name, email, dob, product_id, product.name, product.amount_paise, rp_order.id]
+    );
 
     res.json({
       rp_order_id:  rp_order.id,
@@ -199,95 +161,65 @@ app.post('/orders/create', async (req, res) => {
       key_id:       process.env.RAZORPAY_KEY_ID,
     });
   } catch (err) {
-    console.error('Razorpay create order error:', err);
+    console.error('Create order error:', err);
     res.status(500).json({ error: 'Could not create payment order.' });
   }
 });
 
-// ── RAZORPAY WEBHOOK ──────────────────────────────
-// Razorpay calls this after payment is confirmed
-// Set this URL in Razorpay Dashboard → Webhooks
-app.post('/webhook/razorpay', (req, res) => {
+// ── Razorpay webhook ─────────────────────────────
+app.post('/webhook/razorpay', async (req, res) => {
   const signature = req.headers['x-razorpay-signature'];
-  const secret    = process.env.RAZORPAY_WEBHOOK_SECRET;
-
-  // Verify signature
-  const expected = crypto
-    .createHmac('sha256', secret)
-    .update(req.body)
-    .digest('hex');
+  const expected  = crypto.createHmac('sha256', process.env.RAZORPAY_WEBHOOK_SECRET)
+                          .update(req.body).digest('hex');
 
   if (signature !== expected) {
-    console.warn('Razorpay webhook: invalid signature');
+    console.warn('Webhook: invalid signature');
     return res.status(400).json({ error: 'Invalid signature' });
   }
 
   const event = JSON.parse(req.body.toString());
-
   if (event.event === 'payment.captured') {
-    const payment   = event.payload.payment.entity;
-    const rp_order_id = payment.order_id;
-
-    db.prepare(`
-      UPDATE orders
-      SET status = 'paid',
-          rp_payment_id = ?,
-          rp_signature  = ?
-      WHERE rp_order_id = ?
-    `).run(payment.id, signature, rp_order_id);
-
-    console.log(`✦ Payment captured: order ${rp_order_id}`);
+    const payment = event.payload.payment.entity;
+    await dbRun(
+      `UPDATE orders SET status='paid', rp_payment_id=?, rp_signature=? WHERE rp_order_id=?`,
+      [payment.id, signature, payment.order_id]
+    );
+    console.log(`✦ Payment captured: ${payment.order_id}`);
   }
-
   res.json({ received: true });
 });
 
-// ════════════════════════════════════════════════
-//  ADMIN ROUTES  (protected by ADMIN_TOKEN)
-// ════════════════════════════════════════════════
-
-// GET /admin/orders?status=paid          → list orders
-// GET /admin/orders?status=all           → all orders
-app.get('/admin/orders', requireAdmin, (req, res) => {
+// ── Admin: list orders ───────────────────────────
+app.get('/admin/orders', requireAdmin, async (req, res) => {
   const { status } = req.query;
-  let rows;
-
-  if (!status || status === 'all') {
-    rows = db.prepare(`SELECT * FROM orders ORDER BY created_at DESC`).all();
-  } else {
-    rows = db.prepare(`SELECT * FROM orders WHERE status = ? ORDER BY created_at DESC`).all(status);
-  }
-
+  const rows = status && status !== 'all'
+    ? await dbAll(`SELECT * FROM orders WHERE status=? ORDER BY created_at DESC`, [status])
+    : await dbAll(`SELECT * FROM orders ORDER BY created_at DESC`, []);
   res.json(rows);
 });
 
-// GET /admin/orders/:id  → single order detail
-app.get('/admin/orders/:id', requireAdmin, (req, res) => {
-  const row = db.prepare(`SELECT * FROM orders WHERE id = ?`).get(req.params.id);
+// ── Admin: single order ──────────────────────────
+app.get('/admin/orders/:id', requireAdmin, async (req, res) => {
+  const row = await dbGet(`SELECT * FROM orders WHERE id=?`, [req.params.id]);
   if (!row) return res.status(404).json({ error: 'Order not found' });
   res.json(row);
 });
 
-// POST /admin/orders/:id/complete  → mark report as sent
-app.post('/admin/orders/:id/complete', requireAdmin, (req, res) => {
-  const { notes } = req.body;   // optional note e.g. "Report emailed at 3pm"
-  const info = db.prepare(`
-    UPDATE orders SET status = 'report_sent', notes = ? WHERE id = ?
-  `).run(notes || '', req.params.id);
-
-  if (info.changes === 0) return res.status(404).json({ error: 'Order not found' });
+// ── Admin: mark report sent ──────────────────────
+app.post('/admin/orders/:id/complete', requireAdmin, async (req, res) => {
+  const { notes } = req.body;
+  await dbRun(`UPDATE orders SET status='report_sent', notes=? WHERE id=?`, [notes||'', req.params.id]);
   res.json({ success: true });
 });
 
-// GET /admin/dashboard  → summary counts
-app.get('/admin/dashboard', requireAdmin, (req, res) => {
-  const counts = db.prepare(`
-    SELECT status, COUNT(*) as count, SUM(amount_paise) as total_paise
-    FROM orders GROUP BY status
-  `).all();
-  res.json(counts);
+// ── Admin: dashboard stats ───────────────────────
+app.get('/admin/dashboard', requireAdmin, async (req, res) => {
+  const rows = await dbAll(
+    `SELECT status, COUNT(*) as count, SUM(amount_paise) as total_paise FROM orders GROUP BY status`, []
+  );
+  res.json(rows);
 });
 
 // ── Start ────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`NumeroSoul backend running on port ${PORT} ✦`));
+app.listen(PORT, '0.0.0.0', () => console.log(`NumeroSoul backend running on port ${PORT} ✦`));

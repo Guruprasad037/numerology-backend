@@ -1,7 +1,7 @@
 // ============================================================
 // routes/reading.js
 // POST /reading
-// Free Numerology Reading API
+// Free Numerology Reading API (with Master Number support)
 // ============================================================
 
 const express = require('express');
@@ -15,6 +15,22 @@ const {
 } = require('../helpers/numerology');
 
 const { READINGS, VALID_GENDERS } = require('../helpers/data');
+
+
+// ─────────────────────────────────────────────────────────────
+// Helper: extract master number (11, 22, 33)
+// ─────────────────────────────────────────────────────────────
+function getMasterNumber(dob) {
+  const digits = dob.replace(/-/g, '').split('').map(Number);
+  const total = digits.reduce((a, b) => a + b, 0);
+
+  // check master numbers before reduction
+  if (total === 11 || total === 22 || total === 33) {
+    return total;
+  }
+
+  return null;
+}
 
 
 // ─────────────────────────────────────────────────────────────
@@ -43,24 +59,24 @@ router.post('/', async (req, res) => {
     });
   }
 
-  // ── Numerology Calculations (FIXED LOGIC) ──────────────────
-  const birth_num = calcBirthNum(dob);        // day-based
-  const destiny_num = calcDestinyNum(dob);    // FULL DOB-based
+  // ── Numerology Calculations ────────────────────────────────
+  const birth_num = calcBirthNum(dob);
+  const destiny_num = calcDestinyNum(dob);
+  const master_number = getMasterNumber(dob);
 
   const reading = READINGS[birth_num] || READINGS[1];
 
-  // ── Save to DB (non-blocking) ──────────────────────────────
+  // ── Save to DB (UPDATED SCHEMA) ────────────────────────────
   dbRun(
     `INSERT INTO free_readings 
-     (name, phone, dob, gender, birth_num, destiny_num)
-     VALUES ($1, $2, $3, $4, $5, $6)`,
+     (name, dob, birth_num, destiny_num, master_number)
+     VALUES ($1, $2, $3, $4, $5)`,
     [
       name.trim(),
-      phone.trim(),
       dob,
-      gender,
       birth_num,
-      destiny_num
+      destiny_num,
+      master_number
     ]
   ).catch(err => {
     console.error('Failed to save free reading:', err);
@@ -72,6 +88,7 @@ router.post('/', async (req, res) => {
     dob_fmt: formatDob(dob),
     birth_num,
     destiny_num,
+    master_number,
     traits: reading.traits,
     reading: reading.text
   });

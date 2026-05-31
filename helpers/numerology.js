@@ -25,45 +25,18 @@ function reduceToSingle(n) {
 }
 
 
-// ── Birth Number ──────────────────────────────────────────────
-/**
- * Calculates the Birth Number from a date of birth string.
- * Sums all digits in the date, then reduces to a single digit.
- *
- * Example: "1990-07-25"
- *   digits → [1,9,9,0,0,7,2,5] → sum = 33 → 3+3 = 6
- *
- * @param {string} dob  ISO date string, e.g. "1990-07-25"
- * @returns {number}
- */
+// Birth Number — day of birth only, reduced to single digit
 function calcBirthNum(dob) {
+  const day = parseInt(dob.split('-')[2]);
+  return reduceToSingle(day);
+}
+
+// Destiny Number — sum ALL digits of full DOB, reduced to single digit
+function calcDestinyNum(dob) {
   const digits = dob.replace(/-/g, '').split('').map(Number);
   const total  = digits.reduce((a, b) => a + b, 0);
   return reduceToSingle(total);
 }
-
-
-// ── Destiny Number ────────────────────────────────────────────
-/**
- * Calculates the Destiny Number from a full name.
- * Each letter is converted to its alphabet position (A=1 … Z=26),
- * all values are summed, then reduced to a single digit.
- *
- * Example: "ANA" → 1+14+1 = 16 → 1+6 = 7
- *
- * @param {string} name  Full name (any case, spaces ignored)
- * @returns {number}
- */
-function calcDestinyNum(name) {
-  const total = name
-    .toUpperCase()
-    .replace(/[^A-Z]/g, '')           // keep only letters
-    .split('')
-    .reduce((sum, char) => sum + (char.charCodeAt(0) - 64), 0);
-  return reduceToSingle(total);
-}
-
-
 // ── Date formatter ────────────────────────────────────────────
 /**
  * Formats an ISO date string into a human-readable format.

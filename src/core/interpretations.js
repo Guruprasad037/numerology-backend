@@ -1,5 +1,5 @@
 // ============================================================
-//  helpers/data.js
+//  core/interpretations.js
 //  Static content: numerology reading texts and product catalogue.
 //
 //  Structure:

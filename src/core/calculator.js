@@ -1,5 +1,5 @@
 // ============================================================
-//  helpers/numerology.js
+//  core/calculator.js
 //  Pure Pythagorean numerology calculations.
 //
 //  Calculates all 7 core numbers:

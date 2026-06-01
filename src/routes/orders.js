@@ -16,7 +16,7 @@ const express    = require('express');
 const router     = express.Router();
 const Razorpay   = require('razorpay');
 const { dbRun }  = require('../config/db');
-const { PRODUCTS, VALID_GENDERS } = require('../helpers/data');
+const { PRODUCTS, VALID_GENDERS } = require('../core/interpretations');
 
 
 // ── Razorpay client ───────────────────────────────────────────

@@ -12,9 +12,9 @@ const {
   calcBirthNum,
   calcDestinyNum,
   formatDob
-} = require('../helpers/numerology');
+} = require('../core/calculator');
 
-const { READINGS, VALID_GENDERS } = require('../helpers/data');
+const { READINGS, VALID_GENDERS } = require('../core/interpretations');
 
 
 // ─────────────────────────────────────────────────────────────

@@ -1,0 +1,20 @@
+
+
+numerology-backend/
+  server.js
+  package.json
+  .env
+  .gitignore
+
+  src/config/db.js
+
+  src/core/calculator.js
+  src/core/interpretations.js
+
+   src/routes/index.js
+   src/routes/reading.js
+   src/routes/orders.js
+   src/routes/webhook.js
+   src/routes/admin.js
+
+   src/middleware/auth.js

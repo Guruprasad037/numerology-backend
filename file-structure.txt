@@ -6,15 +6,31 @@ numerology-backend/
   .env
   .gitignore
 
+  reading.settings.js
+
   src/config/db.js
+  src/config/products.js
 
-  src/core/calculator.js
-  src/core/interpretations.js
+  src/engines/dispatcher.js
+  src/engines/hardcoded.js
+  src/engines/claude.js
+  src/engines/openai.js
 
-   src/routes/index.js
-   src/routes/reading.js
-   src/routes/orders.js
-   src/routes/webhook.js
-   src/routes/admin.js
+  src/middleware/auth.js
 
-   src/middleware/auth.js
+  src/prompts/free_reading_v1.0
+  src/prompts/free_reading_v2.0
+  src/prompts/career_1.0.js
+  src/prompts/love_1.0.js
+
+  src/routes/admin.js
+  src/routes/index.js
+  src/routes/orders.js
+  src/routes/reading.js
+  src/routes/webhook.js
+
+  src/services/free-reading.js
+  src/services/paid-reading.js (empty)
+  src/services/reading-db.js
+
+  src/utils/calculator.js

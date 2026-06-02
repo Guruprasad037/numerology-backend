@@ -1,187 +1,310 @@
 // ============================================================
 //  routes/admin.js
-//  All /admin/* routes — protected by requireAdmin middleware.
+//  Admin API routes (all protected by requireAdmin middleware)
 //
-//  Available endpoints:
-//    GET  /admin/orders              — list all orders (filterable by status)
-//    GET  /admin/orders/:id          — single order detail
-//    POST /admin/orders/:id/complete — mark order as report_sent
-//    GET  /admin/dashboard           — order counts + revenue by status
-//    GET  /admin/leads               — list all free reading leads
-//    GET  /admin/leads/export        — export leads as CSV
+//  Endpoints:
+//    GET  /admin/dashboard         — summary stats
+//    GET  /admin/users             — all users
+//    GET  /admin/profiles          — all numerology profiles
+//    GET  /admin/orders            — all orders (filter by ?status=)
+//    GET  /admin/readings          — all readings (filter by ?status=)
+//    GET  /admin/pending           — readings pending delivery
+//    POST /admin/readings/:id/deliver  — mark reading as delivered
+//    GET  /admin/leads/export      — CSV export of free users
 // ============================================================
 
-const express          = require('express');
-const router           = express.Router();
+const express = require('express');
+const router  = express.Router();
 const { dbAll, dbGet, dbRun } = require('../config/db');
-const { requireAdmin } = require('../middleware/auth');
+const { requireAdmin }        = require('../middleware/auth');
 
-
-// ── Apply admin auth to ALL routes in this file ───────────────
-// Every route below automatically requires the admin token.
 router.use(requireAdmin);
 
 
-// ── GET /admin/orders ─────────────────────────────────────────
-// Returns all orders, newest first.
-// Optional query param: ?status=paid | pending_payment | report_sent | all
+// ─────────────────────────────────────────────
+// DASHBOARD
+// ─────────────────────────────────────────────
+
+router.get('/dashboard', async (req, res) => {
+  try {
+    const [userStats, orderStats, readingStats, recentOrders, pendingReadings] =
+      await Promise.all([
+        // User counts by tier
+        dbAll(`SELECT tier, COUNT(*) AS count FROM users WHERE deleted_at IS NULL GROUP BY tier`),
+
+        // Order totals by status
+        dbAll(`SELECT status, COUNT(*) AS count, COALESCE(SUM(final_amount), 0) AS total
+               FROM orders GROUP BY status`),
+
+        // Reading counts by status
+        dbAll(`SELECT status, COUNT(*) AS count FROM readings GROUP BY status`),
+
+        // 5 most recent paid orders
+        dbAll(`SELECT o.id, u.full_name, u.email, o.product_name, o.final_amount,
+                      o.currency, o.status, o.created_at
+               FROM orders o JOIN users u ON u.id = o.user_id
+               WHERE o.status = 'paid'
+               ORDER BY o.created_at DESC LIMIT 5`),
+
+        // Count of undelivered paid readings
+        dbGet(`SELECT COUNT(*) AS count FROM readings
+               WHERE status = 'pending' AND order_id IS NOT NULL`),
+      ]);
+
+    const paid = orderStats.find(r => r.status === 'paid');
+
+    res.json({
+      users:            userStats,
+      orders:           orderStats,
+      readings:         readingStats,
+      recent_orders:    recentOrders,
+      pending_count:    parseInt(pendingReadings?.count || 0),
+      total_revenue_inr: paid ? Math.round(parseInt(paid.total) / 100) : 0,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to fetch dashboard.' });
+  }
+});
+
+
+// ─────────────────────────────────────────────
+// USERS
+// ─────────────────────────────────────────────
+
+router.get('/users', async (req, res) => {
+  try {
+    const { tier } = req.query;
+
+    const rows = (tier && tier !== 'all')
+      ? await dbAll(
+          `SELECT id, full_name, dob, email, phone, gender, tier, locale,
+                  created_at, deleted_at
+           FROM users WHERE tier = $1 AND deleted_at IS NULL
+           ORDER BY created_at DESC`,
+          [tier]
+        )
+      : await dbAll(
+          `SELECT id, full_name, dob, email, phone, gender, tier, locale,
+                  created_at, deleted_at
+           FROM users WHERE deleted_at IS NULL
+           ORDER BY created_at DESC`
+        );
+
+    res.json({ count: rows.length, users: rows });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to fetch users.' });
+  }
+});
+
+
+// ─────────────────────────────────────────────
+// NUMEROLOGY PROFILES
+// ─────────────────────────────────────────────
+
+router.get('/profiles', async (req, res) => {
+  try {
+    const rows = await dbAll(
+      `SELECT np.id, np.user_id, u.full_name, np.name_used, np.dob_used,
+              np.life_path_number, np.birth_day_number, np.expression_number,
+              np.soul_urge_number, np.personality_number, np.maturity_number,
+              np.personal_year_number, np.has_master_11, np.has_master_22,
+              np.has_master_33, np.has_karmic_debt, np.karmic_debt_numbers,
+              np.is_primary, np.calculated_at
+       FROM numerology_profiles np
+       JOIN users u ON u.id = np.user_id
+       WHERE np.is_primary = TRUE
+       ORDER BY np.calculated_at DESC`
+    );
+
+    res.json({ count: rows.length, profiles: rows });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to fetch profiles.' });
+  }
+});
+
+
+// ─────────────────────────────────────────────
+// ORDERS
+// ─────────────────────────────────────────────
+
 router.get('/orders', async (req, res) => {
   try {
     const { status } = req.query;
 
     const rows = (status && status !== 'all')
       ? await dbAll(
-          `SELECT * FROM orders WHERE status = $1 ORDER BY created_at DESC`,
+          `SELECT o.*, u.full_name, u.email, u.phone
+           FROM orders o JOIN users u ON u.id = o.user_id
+           WHERE o.status = $1 ORDER BY o.created_at DESC`,
           [status]
         )
       : await dbAll(
-          `SELECT * FROM orders ORDER BY created_at DESC`,
-          []
+          `SELECT o.*, u.full_name, u.email, u.phone
+           FROM orders o JOIN users u ON u.id = o.user_id
+           ORDER BY o.created_at DESC`
         );
 
-    return res.json({ count: rows.length, orders: rows });
+    res.json({ count: rows.length, orders: rows });
   } catch (err) {
-    console.error('Admin orders error:', err);
-    return res.status(500).json({ error: 'Failed to fetch orders.' });
+    console.error(err);
+    res.status(500).json({ error: 'Failed to fetch orders.' });
   }
 });
 
 
-// ── GET /admin/orders/:id ─────────────────────────────────────
-// Returns a single order by its internal DB id.
-router.get('/orders/:id', async (req, res) => {
+// ─────────────────────────────────────────────
+// READINGS
+// ─────────────────────────────────────────────
+
+router.get('/readings', async (req, res) => {
   try {
-    const row = await dbGet(
-      `SELECT * FROM orders WHERE id = $1`,
+    const { status } = req.query;
+
+    const rows = (status && status !== 'all')
+      ? await dbAll(
+          `SELECT r.id, r.user_id, u.full_name, u.email,
+                  r.product_slug, r.status, r.engine_used,
+                  r.delivered_to, r.generated_at, r.delivered_at, r.created_at,
+                  r.order_id
+           FROM readings r JOIN users u ON u.id = r.user_id
+           WHERE r.status = $1 ORDER BY r.created_at DESC`,
+          [status]
+        )
+      : await dbAll(
+          `SELECT r.id, r.user_id, u.full_name, u.email,
+                  r.product_slug, r.status, r.engine_used,
+                  r.delivered_to, r.generated_at, r.delivered_at, r.created_at,
+                  r.order_id
+           FROM readings r JOIN users u ON u.id = r.user_id
+           ORDER BY r.created_at DESC`
+        );
+
+    res.json({ count: rows.length, readings: rows });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to fetch readings.' });
+  }
+});
+
+
+// ─────────────────────────────────────────────
+// PENDING READINGS (action queue)
+// Paid orders where report hasn't been delivered yet
+// ─────────────────────────────────────────────
+
+router.get('/pending', async (req, res) => {
+  try {
+    const rows = await dbAll(
+      `SELECT r.id AS reading_id,
+              u.full_name, u.email, u.phone, u.gender,
+              np.life_path_number, np.birth_day_number, np.expression_number,
+              np.soul_urge_number, np.personality_number, np.maturity_number,
+              np.personal_year_number, np.has_master_11, np.has_master_22,
+              np.has_master_33, np.karmic_debt_numbers, np.dob_used,
+              r.product_slug, r.created_at AS reading_created_at,
+              o.final_amount, o.currency, o.paid_at
+       FROM readings r
+       JOIN users u  ON u.id  = r.user_id
+       JOIN numerology_profiles np ON np.id = r.profile_id
+       LEFT JOIN orders o ON o.id = r.order_id
+       WHERE r.status = 'pending' AND r.order_id IS NOT NULL
+       ORDER BY r.created_at ASC`  -- oldest first = serve in order
+    );
+
+    res.json({ count: rows.length, pending: rows });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to fetch pending readings.' });
+  }
+});
+
+
+// ─────────────────────────────────────────────
+// MARK READING AS DELIVERED
+// ─────────────────────────────────────────────
+
+router.post('/readings/:id/deliver', async (req, res) => {
+  try {
+    const { delivered_to, report_text = '' } = req.body;
+
+    if (!delivered_to)
+      return res.status(400).json({ error: 'delivered_to (email) is required.' });
+
+    await dbRun(
+      `UPDATE readings
+       SET status       = 'delivered',
+           delivered_to = $1,
+           report_text  = NULLIF($2, ''),
+           delivered_at = NOW(),
+           generated_at = COALESCE(generated_at, NOW())
+       WHERE id = $3`,
+      [delivered_to, report_text, req.params.id]
+    );
+
+    // Also update user tier to 'paid' if not already
+    await dbRun(
+      `UPDATE users SET tier = 'paid', updated_at = NOW()
+       WHERE id = (SELECT user_id FROM readings WHERE id = $1)
+         AND tier = 'free'`,
       [req.params.id]
     );
 
-    if (!row) {
-      return res.status(404).json({ error: 'Order not found.' });
-    }
-
-    return res.json(row);
+    res.json({ success: true });
   } catch (err) {
-    console.error('Admin single order error:', err);
-    return res.status(500).json({ error: 'Failed to fetch order.' });
+    console.error(err);
+    res.status(500).json({ error: 'Failed to mark as delivered.' });
   }
 });
 
 
-// ── POST /admin/orders/:id/complete ───────────────────────────
-// Marks an order as 'report_sent' and saves optional admin notes.
-// Body: { notes: "Sent via email at 10:30am" }
-router.post('/orders/:id/complete', async (req, res) => {
-  try {
-    const { notes = '' } = req.body;
+// ─────────────────────────────────────────────
+// CSV EXPORT — free users / leads
+// ─────────────────────────────────────────────
 
-    await dbRun(
-      `UPDATE orders
-       SET status = 'report_sent', notes = $1
-       WHERE id = $2`,
-      [notes, req.params.id]
-    );
-
-    return res.json({ success: true, message: 'Order marked as report_sent.' });
-  } catch (err) {
-    console.error('Admin complete order error:', err);
-    return res.status(500).json({ error: 'Failed to update order.' });
-  }
-});
-
-
-// ── GET /admin/dashboard ──────────────────────────────────────
-// Returns order counts and total revenue grouped by status.
-// Also includes total paid revenue in rupees for quick reference.
-router.get('/dashboard', async (req, res) => {
-  try {
-    const statusRows = await dbAll(
-      `SELECT
-         status,
-         COUNT(*)            AS count,
-         SUM(amount_paise)   AS total_paise
-       FROM orders
-       GROUP BY status`,
-      []
-    );
-
-    // Total paid revenue in rupees (for the summary card)
-    const paidRow = statusRows.find(r => r.status === 'paid');
-    const total_revenue_inr = paidRow
-      ? Math.round(parseInt(paidRow.total_paise) / 100)
-      : 0;
-
-    // Total free reading leads
-    const leadsRow = await dbGet(
-      `SELECT COUNT(*) AS count FROM free_readings`,
-      []
-    );
-
-    return res.json({
-      by_status:          statusRows,
-      total_revenue_inr,
-      total_free_leads:   parseInt(leadsRow?.count || 0),
-    });
-  } catch (err) {
-    console.error('Admin dashboard error:', err);
-    return res.status(500).json({ error: 'Failed to fetch dashboard data.' });
-  }
-});
-
-
-// ── GET /admin/leads ──────────────────────────────────────────
-// Returns all free reading leads, newest first.
-// Useful for remarketing — these are people interested but
-// haven't paid yet.
-router.get('/leads', async (req, res) => {
-  try {
-    const rows = await dbAll(
-      `SELECT * FROM free_readings ORDER BY created_at DESC`,
-      []
-    );
-    return res.json({ count: rows.length, leads: rows });
-  } catch (err) {
-    console.error('Admin leads error:', err);
-    return res.status(500).json({ error: 'Failed to fetch leads.' });
-  }
-});
-
-
-// ── GET /admin/leads/export ───────────────────────────────────
-// Downloads all free reading leads as a CSV file.
-// Open in Excel / Google Sheets for marketing campaigns.
 router.get('/leads/export', async (req, res) => {
   try {
     const rows = await dbAll(
-      `SELECT id, created_at, name, phone, dob, gender, birth_num, destiny_num
-       FROM free_readings
-       ORDER BY created_at DESC`,
-      []
+      `SELECT u.id, u.created_at, u.full_name, u.email, u.phone, u.dob,
+              u.gender, u.tier,
+              np.life_path_number, np.expression_number,
+              np.birth_day_number, np.personal_year_number
+       FROM users u
+       LEFT JOIN numerology_profiles np
+         ON np.user_id = u.id AND np.is_primary = TRUE
+       WHERE u.deleted_at IS NULL
+       ORDER BY u.created_at DESC`
     );
 
-    // Build CSV string
-    const header = 'ID,Created At,Name,Phone,DOB,Gender,Birth Number,Destiny Number';
-    const lines  = rows.map(r =>
-      [
-        r.id,
-        r.created_at,
-        `"${r.name}"`,         // quotes handle commas in names
-        r.phone,
-        r.dob,
-        r.gender,
-        r.birth_num,
-        r.destiny_num,
-      ].join(',')
-    );
-
-    const csv = [header, ...lines].join('\n');
+    const header = 'ID,Created At,Name,Email,Phone,DOB,Gender,Tier,Life Path,Expression,Birth Day,Personal Year';
+    const csv = [
+      header,
+      ...rows.map(r =>
+        [
+          r.id,
+          r.created_at,
+          `"${r.full_name}"`,
+          r.email || '',
+          r.phone || '',
+          r.dob,
+          r.gender || '',
+          r.tier,
+          r.life_path_number || '',
+          r.expression_number || '',
+          r.birth_day_number || '',
+          r.personal_year_number || '',
+        ].join(',')
+      ),
+    ].join('\n');
 
     res.setHeader('Content-Type', 'text/csv');
     res.setHeader('Content-Disposition', 'attachment; filename="numerosoul-leads.csv"');
-    return res.send(csv);
+    res.send(csv);
   } catch (err) {
-    console.error('Admin leads export error:', err);
-    return res.status(500).json({ error: 'Failed to export leads.' });
+    console.error(err);
+    res.status(500).json({ error: 'Failed to export leads.' });
   }
 });
 

@@ -1,28 +1,63 @@
-// ============================================================
-//  src/reading.settings.js
-//  Single control panel for all reading behaviour.
-//  Change engine or prompt version here — nowhere else.
-// ============================================================
+// src/reading.settings.js
 
-module.exports = {
+const FILE = "src/reading.settings.js";
 
-  // 'claude' | 'openai' | 'hardcoded'
-  defaultEngine:  'hardcoded',
-  fallbackEngine: 'hardcoded',
+function log(step, message, data) {
+  console.log(
+    `[${FILE}] STEP ${step} ${message}`,
+    data ? JSON.stringify(data) : ""
+  );
+}
 
-  // Per-service engine overrides (uncomment to override one service)
+log(1, "Module loaded");
+
+// ---------------- CONFIG ----------------
+
+const config = {
+  defaultEngine: "hardcoded",
+  fallbackEngine: "hardcoded",
+
   engineOverrides: {
     // free_reading: 'claude',
   },
 
-  // Active prompt version per service
-  // Must match a filename in src/prompts/ — e.g. 'v1.0' → free_reading_v1.0.js
   promptVersions: {
-    free_reading: 'v1.0',
-    career:       'v1.0',
-    love:         'v1.0',
-    health:       'v1.0',
-    blueprint:    'v1.0',
+    free_reading: "v1.0",
+    career: "v1.0",
+    love: "v1.0",
+    health: "v1.0",
+    blueprint: "v1.0",
   },
+};
 
+log(2, "Base config initialized", config);
+
+// ---------------- RESOLVER (THIS IS THE IMPORTANT PART) ----------------
+
+function resolveSettings(serviceName) {
+  log(3, "Resolving settings for service", { serviceName });
+
+  const engine =
+    config.engineOverrides[serviceName] ||
+    config.defaultEngine;
+
+  const promptVersion =
+    config.promptVersions[serviceName] || "v1.0";
+
+  const result = {
+    serviceName,
+    engine,
+    promptVersion,
+  };
+
+  log(4, "Resolved settings", result);
+
+  return result;
+}
+
+log(5, "Settings module ready");
+
+module.exports = {
+  ...config,
+  resolveSettings,
 };

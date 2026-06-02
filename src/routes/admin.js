@@ -211,7 +211,8 @@ router.get('/pending', async (req, res) => {
        JOIN numerology_profiles np ON np.id = r.profile_id
        LEFT JOIN orders o ON o.id = r.order_id
        WHERE r.status = 'pending' AND r.order_id IS NOT NULL
-       ORDER BY r.created_at ASC`  -- oldest first = serve in order
+	ORDER BY r.created_at ASC -- oldest first = serve in order
+`
     );
 
     res.json({ count: rows.length, pending: rows });

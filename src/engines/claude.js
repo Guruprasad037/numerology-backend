@@ -7,16 +7,29 @@ const FILE = "src/engines/claude.js";
 function log(step, message, data = null) {
   console.log(
     `[${FILE}] STEP ${step} ${message}`,
-    data ? JSON.stringify(data) : ""
+    data ? JSON.stringify(data, null, 2) : ""
+  );
+}
+
+function error(step, message, data = null) {
+  console.error(
+    `[${FILE}] ❌ STEP ${step} ${message}`,
+    data ? JSON.stringify(data, null, 2) : ""
   );
 }
 
 async function run(prompt) {
   log(1, "run() called");
 
+  log(1.1, "environment check", {
+    hasApiKey: !!process.env.ANTHROPIC_API_KEY,
+    model: "claude-sonnet-4-20250514",
+  });
+
   log(2, "Sending request to Claude API", {
     model: "claude-sonnet-4-20250514",
-    promptPreview: prompt?.slice(0, 200),
+    promptLength: prompt?.length,
+    promptPreview: prompt?.slice(0, 300),
   });
 
   let response;
@@ -38,48 +51,70 @@ async function run(prompt) {
       }),
     });
   } catch (err) {
-    log(3, "Network error calling Claude API", { error: err.message });
+    error(3, "Network error calling Claude API", {
+      message: err.message,
+      stack: err.stack,
+    });
     throw err;
   }
 
   log(4, "Claude API responded", {
     status: response.status,
     ok: response.ok,
+    headers: Object.fromEntries(response.headers.entries()),
   });
 
   if (!response.ok) {
     const err = await response.text();
-    log(5, "Claude API error response", {
+
+    error(5, "Claude API returned error response", {
       status: response.status,
-      error: err,
+      body: err,
     });
+
     throw new Error(`Claude API error ${response.status}: ${err}`);
   }
 
   const data = await response.json();
 
   log(6, "Raw Claude response received", {
+    type: typeof data,
     keys: Object.keys(data || {}),
   });
 
   const raw = data.content?.[0]?.text || "";
 
+  if (!raw) {
+    error(6.1, "EMPTY response text from Claude", { data });
+  }
+
   log(7, "Extracted raw text", {
-    preview: raw.slice(0, 200),
+    length: raw.length,
+    preview: raw.slice(0, 300),
+    tailPreview: raw.slice(-200),
   });
 
   try {
     const clean = raw.replace(/```json|```/g, "").trim();
 
+    log(7.1, "Cleaned JSON string ready for parse", {
+      length: clean.length,
+      preview: clean.slice(0, 200),
+    });
+
     const parsed = JSON.parse(clean);
 
-    log(8, "JSON parse success");
+    log(8, "JSON parse SUCCESS", {
+      hasCards: !!parsed?.cards,
+      cardCount: parsed?.cards?.length,
+      hasCTA: !!parsed?.cta,
+    });
 
     return parsed;
   } catch (err) {
-    log(9, "JSON parse FAILED", {
+    error(9, "JSON parse FAILED", {
       error: err.message,
-      rawPreview: raw.slice(0, 300),
+      rawPreview: raw.slice(0, 500),
     });
 
     throw new Error(

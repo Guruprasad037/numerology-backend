@@ -16,6 +16,9 @@
 
 module.exports = function buildPrompt(profile) {
 
+  console.log('[free_reading_v1.0] STEP 1 buildPrompt called');
+  console.log('[free_reading_v1.0] profile received:', JSON.stringify(profile, null, 2));
+
   const {
     name,
     birth_num,
@@ -39,6 +42,8 @@ module.exports = function buildPrompt(profile) {
     hook_description,
   } = profile;
 
+ console.log('[free_reading_v1.0] STEP 2 destructured profile');
+
   // Derive first name for personalisation
   const firstName = (name || '').trim().split(/\s+/)[0] || 'friend';
 
@@ -50,12 +55,15 @@ module.exports = function buildPrompt(profile) {
     return 'None';
   })();
 
+ console.log('[free_reading_v1.0] STEP 4 masterList:', masterList);
   // Build karmic debt string
   const karmicDebtStr = (() => {
     if (Array.isArray(karmic_debt_numbers) && karmic_debt_numbers.length)
       return karmic_debt_numbers.join(', ');
     return 'None';
   })();
+
+  console.log('[free_reading_v1.0] STEP 5 karmicDebtStr:', karmicDebtStr);
 
   // Build karmic lessons string
   const karmicLessonsStr = (() => {
@@ -64,12 +72,14 @@ module.exports = function buildPrompt(profile) {
     return 'None';
   })();
 
+  console.log('[free_reading_v1.0] STEP 6 karmicLessonsStr:', karmicLessonsStr);
   // Build hidden passions string
   const hiddenPassionsStr = (() => {
     if (Array.isArray(hidden_passions) && hidden_passions.length)
       return hidden_passions.join(', ');
     return 'None';
   })();
+console.log('[free_reading_v1.0] STEP 7 hiddenPassionsStr:', hiddenPassionsStr);
 
   // Determine the dominant plane for Card 6 context
   const planeCounts = {

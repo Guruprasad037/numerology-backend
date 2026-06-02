@@ -1,26 +1,15 @@
 // ============================================================
-//  routes/webhook.js
+//  src/routes/webhook.js
 //  POST /webhook/razorpay
-//
-//  IMPORTANT: Uses express.raw() middleware (set in server.js).
-//  Must be mounted BEFORE express.json() — already handled.
-//
-//  Flow on payment.captured:
-//    1. Verify Razorpay signature
-//    2. Mark order as 'paid' in orders table
-//    3. Upgrade user tier to 'paid'
-//    4. Ensure numerology_profile exists for the user
-//    5. Create a pending reading record (waiting for you to write + send)
 // ============================================================
 const express  = require('express');
 const router   = express.Router();
 const crypto   = require('crypto');
-const { dbRun, dbGet, dbAll } = require('../config/db');
-const { buildNumerologyProfile } = require('../core/calculator');
+const { dbRun, dbGet } = require('../config/db');
+const { buildNumerologyProfile } = require('../utils/calculator'); // ← changed
 
 router.post('/', async (req, res) => {
 
-  // ── Step 1: Verify signature ─────────────────────────────────
   const receivedSig = req.headers['x-razorpay-signature'];
   const expectedSig = crypto
     .createHmac('sha256', process.env.RAZORPAY_WEBHOOK_SECRET)
@@ -32,7 +21,6 @@ router.post('/', async (req, res) => {
     return res.status(400).json({ error: 'Invalid signature' });
   }
 
-  // ── Step 2: Parse event ──────────────────────────────────────
   let event;
   try {
     event = JSON.parse(req.body.toString());
@@ -40,7 +28,6 @@ router.post('/', async (req, res) => {
     return res.status(400).json({ error: 'Invalid JSON body' });
   }
 
-  // Only handle payment.captured
   if (event.event !== 'payment.captured') {
     return res.json({ received: true, action: 'ignored' });
   }
@@ -50,7 +37,6 @@ router.post('/', async (req, res) => {
   const rpPayId   = payment.id;
 
   try {
-    // ── Step 3: Find our order ───────────────────────────────
     const order = await dbGet(
       `SELECT o.*, u.full_name, u.dob, u.email
        FROM orders o
@@ -60,18 +46,15 @@ router.post('/', async (req, res) => {
     );
 
     if (!order) {
-      // Razorpay may send events for test orders — log and move on
       console.warn(`Webhook: no order found for gateway_order_id ${rpOrderId}`);
       return res.json({ received: true, action: 'order_not_found' });
     }
 
-    // Idempotency — if already processed, don't duplicate
     if (order.status === 'paid') {
       console.log(`Webhook: order ${order.id} already paid — skipped`);
       return res.json({ received: true, action: 'already_processed' });
     }
 
-    // ── Step 4: Mark order as paid ───────────────────────────
     await dbRun(
       `UPDATE orders
        SET status             = 'paid',
@@ -82,24 +65,20 @@ router.post('/', async (req, res) => {
       [
         rpPayId,
         JSON.stringify({
-          signature:     receivedSig,
-          webhook_event: event.event,
+          signature:      receivedSig,
+          webhook_event:  event.event,
           payment_method: payment.method,
         }),
         order.id,
       ]
     );
 
-    // ── Step 5: Upgrade user tier ─────────────────────────────
     await dbRun(
       `UPDATE users SET tier = 'paid', updated_at = NOW()
        WHERE id = $1 AND tier = 'free'`,
       [order.user_id]
     );
 
-    // ── Step 6: Ensure numerology profile exists ──────────────
-    // The user may have paid without doing the free reading first
-    // (e.g. direct purchase link). Calculate and save if missing.
     let profile = await dbGet(
       `SELECT id FROM numerology_profiles
        WHERE user_id = $1 AND is_primary = TRUE LIMIT 1`,
@@ -108,8 +87,10 @@ router.post('/', async (req, res) => {
 
     if (!profile) {
       const nums = buildNumerologyProfile(order.full_name, order.dob);
-      const { life_path_num, birth_num, expression_num, soul_urge_num,
-              personality_num, maturity_num, personal_year, master_number } = nums;
+      const {
+        life_path_num, birth_num, expression_num, soul_urge_num,
+        personality_num, maturity_num, personal_year, master_number,
+      } = nums;
 
       const result = await dbRun(
         `INSERT INTO numerology_profiles
@@ -126,16 +107,15 @@ router.post('/', async (req, res) => {
           life_path_num, birth_num,
           expression_num, soul_urge_num, personality_num,
           maturity_num, personal_year,
-          master_number === 11, master_number === 22, master_number === 33,
+          master_number === 11,
+          master_number === 22,
+          master_number === 33,
           master_number ? [master_number] : [],
         ]
       );
       profile = result.rows[0];
     }
 
-    // ── Step 7: Create pending reading record ─────────────────
-    // status = 'pending' means you haven't written/sent it yet.
-    // The admin Pending tab will show this immediately.
     await dbRun(
       `INSERT INTO readings
          (user_id, profile_id, order_id,

@@ -3,17 +3,22 @@
 //  POST /orders/create
 //
 //  Flow:
-//    1. Validate input
-//    2. Upsert user into users table (with email/phone/gender)
+//    1. Validate input (customer + subject fields)
+//    2. Upsert customer into customers table
 //    3. Create order on Razorpay
-//    4. Insert pending row in orders table
+//    4. Insert pending row in orders table (with subject fields)
 //    5. Return order details to frontend
+//
+//  Terminology:
+//    customer — the person paying and receiving the report (GURU)
+//    subject  — the person whose numbers are being read (SINDHU or GURU)
+//    is_self  — true when customer and subject are the same person
 // ============================================================
 const express   = require('express');
 const router    = express.Router();
 const Razorpay  = require('razorpay');
-const { dbRun, dbGet }          = require('../config/db');
-const { PRODUCTS, VALID_GENDERS } = require('../config/products');  // ← changed
+const { dbRun, dbGet }            = require('../config/db');
+const { PRODUCTS, VALID_GENDERS } = require('../config/products');
 
 const razorpay = new Razorpay({
   key_id:     process.env.RAZORPAY_KEY_ID,
@@ -23,16 +28,39 @@ const razorpay = new Razorpay({
 router.post('/create', async (req, res) => {
   const {
     product_id,
-    name,
+
+    // Customer fields — person paying and receiving the report
+    name,           // kept for backward compat; used as customer_name if customer_name absent
     email,
     phone,
-    dob,
-    gender = 'Prefer not to say',
+    customer_name,
+    customer_dob,   // optional — customer's own DOB for their profile
+    customer_gender,
+
+    // Subject fields — person whose numerology is being read
+    subject_name,
+    subject_dob,
+    subject_gender,
+
+    // Relationship flag
+    is_self = true,
   } = req.body;
 
+  // Resolve customer_name — accept either spelling from frontend
+  const resolvedCustomerName = (customer_name || name || '').trim();
+  const resolvedIsSelf = is_self === true || is_self === 'true';
+
+  // Resolve subject fields:
+  // If is_self, subject == customer (same person)
+  const resolvedSubjectName   = resolvedIsSelf ? resolvedCustomerName : (subject_name || '').trim();
+  const resolvedSubjectDob    = resolvedIsSelf ? (customer_dob || subject_dob || '') : (subject_dob || '');
+  const resolvedSubjectGender = resolvedIsSelf
+    ? (customer_gender || subject_gender || 'Prefer not to say')
+    : (subject_gender  || 'Prefer not to say');
+
   // ── Validation ──────────────────────────────────────────────
-  if (!product_id || !name || !email || !phone || !dob)
-    return res.status(400).json({ error: 'product_id, name, email, phone, and dob are all required.' });
+  if (!product_id || !resolvedCustomerName || !email || !phone)
+    return res.status(400).json({ error: 'product_id, name, email, and phone are required.' });
 
   if (!email.includes('@'))
     return res.status(400).json({ error: 'Please provide a valid email address.' });
@@ -40,74 +68,116 @@ router.post('/create', async (req, res) => {
   if (!/^\+?[\d\s\-]{7,15}$/.test(phone.trim()))
     return res.status(400).json({ error: 'Please provide a valid phone number.' });
 
-  if (!VALID_GENDERS.includes(gender))
-    return res.status(400).json({ error: `gender must be one of: ${VALID_GENDERS.join(', ')}` });
+  if (!resolvedSubjectName)
+    return res.status(400).json({ error: 'subject_name is required.' });
 
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(dob))
-    return res.status(400).json({ error: 'DOB must be in YYYY-MM-DD format.' });
+  if (!resolvedSubjectDob || !/^\d{4}-\d{2}-\d{2}$/.test(resolvedSubjectDob))
+    return res.status(400).json({ error: 'subject_dob must be in YYYY-MM-DD format.' });
 
-  const product = PRODUCTS[product_id];
-  if (!product)
+  // Build the product list — product_id may be a single slug or
+  // a comma-separated list of slugs (e.g. "career,love")
+  const slugs = product_id.split(',').map(s => s.trim()).filter(Boolean);
+  const products = slugs.map(s => PRODUCTS[s]).filter(Boolean);
+
+  if (products.length === 0)
     return res.status(400).json({ error: 'Unknown product_id.' });
 
+  // Combined amount across all selected products
+  const totalAmountPaise = products.reduce((sum, p) => sum + p.amount_paise, 0);
+  const productNames     = products.map(p => p.name).join(' + ');
+
   try {
-    // ── Step 1: Upsert user ──────────────────────────────────
-    let user = await dbGet(
-      `SELECT id FROM users WHERE email = $1 AND deleted_at IS NULL LIMIT 1`,
+    // ── Step 1: Upsert customer ──────────────────────────────
+    // We match on email (primary identifier for paying customers)
+    let customer = await dbGet(
+      `SELECT id FROM customers WHERE email = $1 AND deleted_at IS NULL LIMIT 1`,
       [email.trim()]
     );
 
-// ✅ NEW
-if (user) {
-  await dbRun(
-    `UPDATE users
-     SET phone = $1, gender = $2, dob = $3,
-         full_name = $4, tier = 'paid_reading', updated_at = NOW()
-     WHERE id = $5`,
-    [phone.trim(), gender, dob, name.trim(), user.id]
-  );
-}else {
+    if (customer) {
+      // Update existing customer record
+      await dbRun(
+        `UPDATE customers
+         SET full_name  = $1,
+             phone      = $2,
+             tier       = 'paid_reading',
+             updated_at = NOW()
+         WHERE id = $3`,
+        [resolvedCustomerName, phone.trim(), customer.id]
+      );
+    } else {
+      // New customer — DOB and gender are optional for paying customers
+      // (they're mandatory only for the subject)
       const result = await dbRun(
-        `INSERT INTO users
+        `INSERT INTO customers
            (full_name, dob, email, phone, gender, tier, locale, timezone)
          VALUES ($1, $2, $3, $4, $5, 'paid_reading', 'en', 'Asia/Kolkata')
          RETURNING id`,
-        [name.trim(), dob, email.trim(), phone.trim(), gender]
+        [
+          resolvedCustomerName,
+          customer_dob || resolvedSubjectDob,  // fallback to subject dob when is_self
+          email.trim(),
+          phone.trim(),
+          customer_gender || 'Prefer not to say',
+        ]
       );
-      user = result.rows[0];
+      customer = result.rows[0];
     }
 
-    const userId = user.id;
+    const customerId = customer.id;
 
     // ── Step 2: Create order on Razorpay ─────────────────────
     const rp_order = await razorpay.orders.create({
-      amount:   product.amount_paise,
+      amount:   totalAmountPaise,
       currency: 'INR',
-      notes:    { user_id: userId, name, email, product_id },
+      notes: {
+        customer_id:   customerId,
+        customer_name: resolvedCustomerName,
+        email,
+        product_id,
+        subject_name:  resolvedSubjectName,
+        is_self:       resolvedIsSelf,
+      },
     });
 
     // ── Step 3: Insert pending order in DB ───────────────────
     await dbRun(
       `INSERT INTO orders
-         (user_id, product_slug, product_name,
+         (user_id,
+          product_slug, product_name,
           amount, currency, discount_amount, final_amount,
-          status, gateway, gateway_order_id)
-       VALUES ($1, $2, $3, $4, 'INR', 0, $4, 'pending', 'razorpay', $5)`,
+          status, gateway, gateway_order_id,
+          is_self,
+          customer_name,
+          subject_name, subject_dob, subject_gender)
+       VALUES
+         ($1,
+          $2, $3,
+          $4, 'INR', 0, $4,
+          'pending', 'razorpay', $5,
+          $6,
+          $7,
+          $8, $9, $10)`,
       [
-        userId,
-        product.id,
-        product.name,
-        product.amount_paise,
+        customerId,
+        slugs[0],       // primary product slug (first selected)
+        productNames,
+        totalAmountPaise,
         rp_order.id,
+        resolvedIsSelf,
+        resolvedCustomerName,
+        resolvedSubjectName,
+        resolvedSubjectDob,
+        resolvedSubjectGender,
       ]
     );
 
     // ── Step 4: Return to frontend ────────────────────────────
     return res.json({
       rp_order_id:  rp_order.id,
-      amount_paise: product.amount_paise,
+      amount_paise: totalAmountPaise,
       currency:     'INR',
-      product_name: product.name,
+      product_name: productNames,
       key_id:       process.env.RAZORPAY_KEY_ID,
     });
 

@@ -1,9 +1,7 @@
 // ============================================================
 //  src/services/reading-db.js
 // ============================================================
-
 const { dbRun, dbGet } = require('../config/db');
-
 const FILE = "src/services/reading-db.js";
 
 function log(step, message, data = null) {
@@ -24,38 +22,33 @@ async function saveReading(name, dob, profile, interpretations) {
 
   log(2, "Profile destructured");
 
-  // ── 1. Upsert user ───────────────────────────────────────────
-  log(3, "Checking if user exists");
-
-  let user = await dbGet(
-    `SELECT id FROM users
+  // ── 1. Upsert customer ───────────────────────────────────────
+  log(3, "Checking if customer exists");
+  let customer = await dbGet(
+    `SELECT id FROM customers
      WHERE full_name = $1 AND dob = $2 AND deleted_at IS NULL
      LIMIT 1`,
     [name, dob]
   );
 
-  log(4, "User lookup result", { found: !!user });
+  log(4, "Customer lookup result", { found: !!customer });
 
-  if (!user) {
-    log(5, "Creating new user");
-
+  if (!customer) {
+    log(5, "Creating new customer");
     const result = await dbRun(
-      `INSERT INTO users (full_name, dob, tier, locale, timezone)
+      `INSERT INTO customers (full_name, dob, tier, locale, timezone)
        VALUES ($1, $2, 'free_reading', 'en', 'Asia/Kolkata')
        RETURNING id`,
       [name, dob]
     );
-
-    user = result.rows[0];
-
-    log(6, "User created", { userId: user.id });
+    customer = result.rows[0];
+    log(6, "Customer created", { customerId: customer.id });
   }
 
-  const userId = user.id;
+  const userId = customer.id;
 
   // ── 2. Insert numerology profile ─────────────────────────────
   log(7, "Updating previous primary profile");
-
   await dbRun(
     `UPDATE numerology_profiles
      SET is_primary = FALSE
@@ -64,7 +57,6 @@ async function saveReading(name, dob, profile, interpretations) {
   );
 
   log(8, "Inserting new numerology profile");
-
   const profileResult = await dbRun(
     `INSERT INTO numerology_profiles (
        user_id, name_used, dob_used, is_primary,
@@ -92,12 +84,10 @@ async function saveReading(name, dob, profile, interpretations) {
   );
 
   const profileId = profileResult.rows[0].id;
-
   log(9, "Profile inserted", { profileId });
 
   // ── 3. Insert reading record ──────────────────────────────────
   log(10, "Inserting reading record");
-
   await dbRun(
     `INSERT INTO readings (
        user_id, profile_id, order_id,
@@ -118,10 +108,7 @@ async function saveReading(name, dob, profile, interpretations) {
     ]
   );
 
-  log(11, "Reading saved successfully", {
-    userId,
-    profileId,
-  });
+  log(11, "Reading saved successfully", { userId, profileId });
 }
 
 module.exports = { saveReading };

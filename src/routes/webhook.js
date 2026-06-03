@@ -6,7 +6,7 @@ const express  = require('express');
 const router   = express.Router();
 const crypto   = require('crypto');
 const { dbRun, dbGet } = require('../config/db');
-const { buildNumerologyProfile } = require('../utils/calculator'); // ← changed
+const { buildNumerologyProfile } = require('../utils/calculator');
 
 router.post('/', async (req, res) => {
 
@@ -37,10 +37,12 @@ router.post('/', async (req, res) => {
   const rpPayId   = payment.id;
 
   try {
+    // Join customers (not users) — also pull subject fields from order
     const order = await dbGet(
-      `SELECT o.*, u.full_name, u.dob, u.email
+      `SELECT o.*,
+              c.full_name AS customer_full_name, c.dob AS customer_dob, c.email
        FROM orders o
-       JOIN users u ON u.id = o.user_id
+       JOIN customers c ON c.id = o.user_id
        WHERE o.gateway_order_id = $1`,
       [rpOrderId]
     );
@@ -55,6 +57,7 @@ router.post('/', async (req, res) => {
       return res.json({ received: true, action: 'already_processed' });
     }
 
+    // Mark order as paid
     await dbRun(
       `UPDATE orders
        SET status             = 'paid',
@@ -73,12 +76,17 @@ router.post('/', async (req, res) => {
       ]
     );
 
+    // Upgrade customer tier — fixed: was 'paid', correct value is 'paid_reading'
     await dbRun(
-      `UPDATE users SET tier = 'paid', updated_at = NOW()
+      `UPDATE customers SET tier = 'paid_reading', updated_at = NOW()
        WHERE id = $1 AND tier = 'free_reading'`,
       [order.user_id]
     );
 
+    // Look up existing profile for this customer.
+    // For the numerology profile we use the SUBJECT (who the reading is for),
+    // not necessarily the customer — subject_name and subject_dob come from
+    // the order row (set at purchase time).
     let profile = await dbGet(
       `SELECT id FROM numerology_profiles
        WHERE user_id = $1 AND is_primary = TRUE LIMIT 1`,
@@ -86,7 +94,12 @@ router.post('/', async (req, res) => {
     );
 
     if (!profile) {
-      const nums = buildNumerologyProfile(order.full_name, order.dob);
+      // Build profile from subject details (subject_name / subject_dob on the order).
+      // Fall back to customer details if subject fields are missing (legacy orders).
+      const nameForProfile = order.subject_name || order.customer_name || order.customer_full_name;
+      const dobForProfile  = order.subject_dob  || order.customer_dob;
+
+      const nums = buildNumerologyProfile(nameForProfile, dobForProfile);
       const {
         life_path_num, birth_num, expression_num, soul_urge_num,
         personality_num, maturity_num, personal_year, master_number,
@@ -103,7 +116,7 @@ router.post('/', async (req, res) => {
          VALUES ($1,$2,$3,TRUE,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
          RETURNING id`,
         [
-          order.user_id, order.full_name, order.dob,
+          order.user_id, nameForProfile, dobForProfile,
           life_path_num, birth_num,
           expression_num, soul_urge_num, personality_num,
           maturity_num, personal_year,
@@ -116,6 +129,7 @@ router.post('/', async (req, res) => {
       profile = result.rows[0];
     }
 
+    // Create pending reading record
     await dbRun(
       `INSERT INTO readings
          (user_id, profile_id, order_id,
@@ -124,7 +138,7 @@ router.post('/', async (req, res) => {
       [order.user_id, profile.id, order.id, order.product_slug]
     );
 
-    console.log(`✦ Payment captured: order ${order.id} | user ${order.user_id} | ${order.product_slug}`);
+    console.log(`✦ Payment captured: order ${order.id} | customer ${order.user_id} | subject: ${order.subject_name || order.customer_full_name} | ${order.product_slug}`);
 
   } catch (err) {
     console.error('Webhook: DB error:', err);

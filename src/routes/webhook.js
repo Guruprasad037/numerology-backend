@@ -75,7 +75,7 @@ router.post('/', async (req, res) => {
 
     await dbRun(
       `UPDATE users SET tier = 'paid', updated_at = NOW()
-       WHERE id = $1 AND tier = 'free'`,
+       WHERE id = $1 AND tier = 'free_reading'`,
       [order.user_id]
     );
 

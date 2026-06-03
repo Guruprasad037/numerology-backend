@@ -245,11 +245,11 @@ router.post('/readings/:id/deliver', async (req, res) => {
       [delivered_to, report_text, req.params.id]
     );
 
-    // Also update user tier to 'paid' if not already
+    // Also update user tier to 'paid_reading' if not already
     await dbRun(
-      `UPDATE users SET tier = 'paid', updated_at = NOW()
+      `UPDATE users SET tier = 'paid_reading', updated_at = NOW()
        WHERE id = (SELECT user_id FROM readings WHERE id = $1)
-         AND tier = 'free'`,
+         AND tier = 'free_reading'`,
       [req.params.id]
     );
 

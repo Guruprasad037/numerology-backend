@@ -41,7 +41,7 @@ async function saveReading(name, dob, profile, interpretations) {
 
     const result = await dbRun(
       `INSERT INTO users (full_name, dob, tier, locale, timezone)
-       VALUES ($1, $2, 'free', 'en', 'Asia/Kolkata')
+       VALUES ($1, $2, 'free_reading', 'en', 'Asia/Kolkata')
        RETURNING id`,
       [name, dob]
     );

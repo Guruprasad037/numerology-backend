@@ -57,19 +57,20 @@ router.post('/create', async (req, res) => {
       [email.trim()]
     );
 
-    if (user) {
-      await dbRun(
-        `UPDATE users
-         SET phone = $1, gender = $2, dob = $3,
-             full_name = $4, updated_at = NOW()
-         WHERE id = $5`,
-        [phone.trim(), gender, dob, name.trim(), user.id]
-      );
-    } else {
+// ✅ NEW
+if (user) {
+  await dbRun(
+    `UPDATE users
+     SET phone = $1, gender = $2, dob = $3,
+         full_name = $4, tier = 'paid_reading', updated_at = NOW()
+     WHERE id = $5`,
+    [phone.trim(), gender, dob, name.trim(), user.id]
+  );
+}else {
       const result = await dbRun(
         `INSERT INTO users
            (full_name, dob, email, phone, gender, tier, locale, timezone)
-         VALUES ($1, $2, $3, $4, $5, 'free', 'en', 'Asia/Kolkata')
+         VALUES ($1, $2, $3, $4, $5, 'paid_reading', 'en', 'Asia/Kolkata')
          RETURNING id`,
         [name.trim(), dob, email.trim(), phone.trim(), gender]
       );

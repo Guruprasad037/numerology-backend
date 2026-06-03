@@ -10,22 +10,22 @@ const PRODUCTS = {
   career: {
     id:           'career',
     name:         'Career & Wealth Report',
-    amount_paise: 59900,
+    amount_paise: 100,
   },
   love: {
     id:           'love',
     name:         'Love & Relationships Report',
-    amount_paise: 59900,
+    amount_paise: 100,
   },
   blueprint: {
     id:           'blueprint',
     name:         'Full Life Blueprint',
-    amount_paise: 99900,
+    amount_paise: 100,
   },
   health: {
     id:           'health',
     name:         'Health & Wellbeing Report',
-    amount_paise: 49900,
+    amount_paise: 100,
   },
 };
 

@@ -1,5 +1,6 @@
 // ============================================================
 //  src/services/free-reading.js
+//  Schema v3 — removed birthName, updated response fields.
 // ============================================================
 
 const { buildNumerologyProfile } = require('../utils/calculator');
@@ -15,27 +16,32 @@ function log(step, message, data = null) {
   );
 }
 
-async function generate(name, dob, birthName = null) {
-  log(1, "generate() called", { name, dob, hasBirthName: !!birthName });
+// birthName param removed — v3 uses single name only
+async function generate(name, dob) {
+  log(1, "generate() called", { name, dob });
 
-  // ── Step 1: Build Chaldean numerology profile ─────────────────
-  const profile = buildNumerologyProfile(name, dob, birthName);
+  // ── Step 1: Build full Chaldean profile (all 83 fields) ──────
+  const profile = buildNumerologyProfile(name, dob);
 
   log(2, "Profile calculated", {
-    psychic_number:      profile.psychic_number,
-    psychic_compound:    profile.psychic_compound,
-    destiny_number:      profile.destiny_number,
-    destiny_compound:    profile.destiny_compound,
-    name_number:         profile.name_number,
-    name_compound:       profile.name_compound,
-    soul_urge_number:    profile.soul_urge_number,
-    personality_number:  profile.personality_number,
-    maturity_number:     profile.maturity_number,
-    power_number:        profile.power_number,
-    personal_year:       profile.personal_year_number,
-    ruling_planet:       profile.ruling_planet,
-    pd_combination:      profile.pd_combination,
-    missing_numbers:     profile.missing_numbers,
+    psychic_number:     profile.psychic_number,
+    psychic_compound:   profile.psychic_compound,
+    destiny_number:     profile.destiny_number,
+    destiny_compound:   profile.destiny_compound,
+    name_number:        profile.name_number,
+    name_compound:      profile.name_compound,
+    life_path_number:   profile.life_path_number,
+    soul_urge_number:   profile.soul_urge_number,
+    personality_number: profile.personality_number,
+    maturity_number:    profile.maturity_number,
+    power_number:       profile.power_number,
+    personal_year:      profile.personal_year_number,
+    ruling_planet:      profile.ruling_planet,
+    pd_combination:     profile.pd_combination,
+    current_pinnacle:   profile.current_pinnacle,
+    has_karmic_debt:    profile.has_karmic_debt,
+    has_master_11:      profile.has_master_11,
+    missing_numbers:    profile.missing_numbers,
   });
 
   try {
@@ -60,33 +66,47 @@ async function generate(name, dob, birthName = null) {
     log(6, "Engine version detected", { isV1 });
 
     // ── Step 5: Build response ────────────────────────────────────
+    // Core numbers always sent to frontend regardless of engine.
+    const coreNumbers = {
+      psychic_number:          profile.psychic_number,
+      psychic_compound:        profile.psychic_compound,
+      destiny_number:          profile.destiny_number,
+      destiny_compound:        profile.destiny_compound,
+      name_number:             profile.name_number,
+      name_compound:           profile.name_compound,
+      soul_urge_number:        profile.soul_urge_number,
+      soul_urge_compound:      profile.soul_urge_compound,
+      personality_number:      profile.personality_number,
+      personality_compound:    profile.personality_compound,
+      life_path_number:        profile.life_path_number,
+      life_path_compound:      profile.life_path_compound,
+      maturity_number:         profile.maturity_number,
+      maturity_compound:       profile.maturity_compound,
+      power_number:            profile.power_number,
+      power_compound:          profile.power_compound,
+      personal_year_number:    profile.personal_year_number,
+      personal_month_number:   profile.personal_month_number,
+      ruling_planet:           profile.ruling_planet,
+      pd_combination:          profile.pd_combination,
+      missing_numbers:         profile.missing_numbers,
+      current_pinnacle:        profile.current_pinnacle,
+      current_challenge:       profile.current_challenge,
+      has_karmic_debt:         profile.has_karmic_debt,
+      karmic_debt_numbers:     profile.karmic_debt_numbers,
+      has_master_11:           profile.has_master_11,
+      has_master_22:           profile.has_master_22,
+      has_master_33:           profile.has_master_33,
+      dominant_plane:          profile.dominant_plane,
+      essence_number:          profile.essence_number,
+    };
+
     let result;
 
     if (isV1) {
-      // ✅ V1 ENGINE PATH (cards-based)
       result = {
         name,
         dob_fmt: profile.dob_fmt,
-
-        // All Chaldean numbers — available for engine / frontend use
-        psychic_number:       profile.psychic_number,
-        psychic_compound:     profile.psychic_compound,
-        destiny_number:       profile.destiny_number,
-        destiny_compound:     profile.destiny_compound,
-        name_number:          profile.name_number,
-        name_compound:        profile.name_compound,
-        soul_urge_number:     profile.soul_urge_number,
-        soul_urge_compound:   profile.soul_urge_compound,
-        personality_number:   profile.personality_number,
-        personality_compound: profile.personality_compound,
-        birth_name_number:    profile.birth_name_number,
-        birth_name_compound:  profile.birth_name_compound,
-        maturity_number:      profile.maturity_number,
-        power_number:         profile.power_number,
-        personal_year_number: profile.personal_year_number,
-        ruling_planet:        profile.ruling_planet,
-        missing_numbers:      profile.missing_numbers,
-        pd_combination:       profile.pd_combination,
+        ...coreNumbers,
 
         // Engine output
         first_name:     interpretations.first_name || name,
@@ -94,36 +114,17 @@ async function generate(name, dob, birthName = null) {
         cta:            interpretations.cta || null,
         traits:         interpretations.traits || [],
         dominant_theme: interpretations.dominant_theme || "",
-
-        // Legacy field — first card body for old frontends
-        reading: interpretations.cards?.[0]?.body || null,
+        reading:        interpretations.cards?.[0]?.body || null,
       };
-
     } else {
-      // ⚠️ LEGACY ENGINE PATH (old hardcoded structure)
+      // Legacy engine path
       log(6.1, "Legacy engine detected (non-v1)");
       const firstCard = interpretations?.birth || {};
 
       result = {
         name,
         dob_fmt: profile.dob_fmt,
-
-        psychic_number:       profile.psychic_number,
-        psychic_compound:     profile.psychic_compound,
-        destiny_number:       profile.destiny_number,
-        destiny_compound:     profile.destiny_compound,
-        name_number:          profile.name_number,
-        name_compound:        profile.name_compound,
-        soul_urge_number:     profile.soul_urge_number,
-        soul_urge_compound:   profile.soul_urge_compound,
-        personality_number:   profile.personality_number,
-        personality_compound: profile.personality_compound,
-        maturity_number:      profile.maturity_number,
-        power_number:         profile.power_number,
-        personal_year_number: profile.personal_year_number,
-        ruling_planet:        profile.ruling_planet,
-        missing_numbers:      profile.missing_numbers,
-        pd_combination:       profile.pd_combination,
+        ...coreNumbers,
 
         first_name:     name,
         reading:        firstCard.text || null,
@@ -135,7 +136,7 @@ async function generate(name, dob, birthName = null) {
     }
 
     log(7, "Final response built", {
-      hasCards:   result.cards?.length || 0,
+      cardCount:  result.cards?.length || 0,
       hasCTA:     !!result.cta,
       traitCount: result.traits?.length || 0,
     });

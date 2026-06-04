@@ -72,23 +72,41 @@ module.exports = function buildPrompt(profile) {
   } = profile;
 
   console.log('[free_reading_v1.0] STEP 2 destructured profile');
+  console.log('[free_reading_v1.0] psychic_number:', psychic_number, '| psychic_compound:', psychic_compound);
+  console.log('[free_reading_v1.0] destiny_number:', destiny_number, '| destiny_compound:', destiny_compound);
+  console.log('[free_reading_v1.0] name_number:', name_number, '| name_compound:', name_compound);
+  console.log('[free_reading_v1.0] soul_urge_number:', soul_urge_number, '| soul_urge_compound:', soul_urge_compound);
+  console.log('[free_reading_v1.0] personality_number:', personality_number, '| personality_compound:', personality_compound);
+  console.log('[free_reading_v1.0] maturity_number:', maturity_number, '| power_number:', power_number);
+  console.log('[free_reading_v1.0] personal_year_number:', personal_year_number, '| ruling_planet:', ruling_planet);
+  console.log('[free_reading_v1.0] pd_combination:', pd_combination);
+  console.log('[free_reading_v1.0] missing_numbers:', missing_numbers);
+  console.log('[free_reading_v1.0] birth_name_used:', birth_name_used, '| birth_name_number:', birth_name_number, '| birth_name_compound:', birth_name_compound);
 
   // Derive first name for personalisation
   const name      = profile.name_used || profile.name || '';
   const firstName = name.trim().split(/\s+/)[0] || 'friend';
+
+  console.log('[free_reading_v1.0] STEP 3 derived name:', name, '| firstName:', firstName);
 
   // Missing numbers — readable string
   const missingStr = (Array.isArray(missing_numbers) && missing_numbers.length)
     ? missing_numbers.join(', ')
     : 'None';
 
+  console.log('[free_reading_v1.0] STEP 4 missingStr:', missingStr);
+
   // Whether user provided a birth name
   const hasBirthName = !!(birth_name_used && birth_name_number);
+
+  console.log('[free_reading_v1.0] STEP 5 hasBirthName:', hasBirthName);
 
   // Whether compound and reduced differ (meaningful in Chaldean)
   const psychicHasCompound  = psychic_compound  && psychic_compound  !== psychic_number;
   const destinyHasCompound  = destiny_compound  && destiny_compound  !== destiny_number;
   const nameHasCompound     = name_compound     && name_compound     !== name_number;
+
+  console.log('[free_reading_v1.0] STEP 6 compound flags — psychicHasCompound:', psychicHasCompound, '| destinyHasCompound:', destinyHasCompound, '| nameHasCompound:', nameHasCompound);
 
   // Psychic-Destiny relationship — same, compatible, or in tension
   const pdSame    = psychic_number === destiny_number;
@@ -96,9 +114,12 @@ module.exports = function buildPrompt(profile) {
     ? `${firstName}'s Psychic and Destiny numbers are both ${psychic_number} — a rare alignment that amplifies this energy throughout their entire life.`
     : `${firstName}'s Psychic Number is ${psychic_number} (inner self, ruled by ${ruling_planet || 'their ruling planet'}) and Destiny Number is ${destiny_number} — two distinct energies they must learn to integrate.`;
 
-  console.log('[free_reading_v1.0] STEP 3 pd context built:', pdContext);
+  console.log('[free_reading_v1.0] STEP 7 pdSame:', pdSame);
+  console.log('[free_reading_v1.0] STEP 7 pd context built:', pdContext);
 
-  return `You are KnowSelfNow — a warm, perceptive Chaldean numerology guide with the depth of a Jungian psychologist and the voice of a trusted mentor. You are writing a personalised free numerology reading for a real person who just entered their name and date of birth on a website called KnowSelfNow.
+  console.log('[free_reading_v1.0] STEP 8 building prompt string...');
+
+  const prompt = `You are KnowSelfNow — a warm, perceptive Chaldean numerology guide with the depth of a Jungian psychologist and the voice of a trusted mentor. You are writing a personalised free numerology reading for a real person who just entered their name and date of birth on a website called KnowSelfNow.
 
 Your reading is based on CHALDEAN numerology — not Pythagorean. This means:
 - The key numbers are Psychic Number (from birth day) and Destiny Number (from full DOB)
@@ -300,4 +321,9 @@ No markdown. No code fences. No explanation. No preamble. No text outside the JS
   "traits": ["4 to 6 single-word or very short traits derived from their specific Chaldean numbers"],
   "dominant_theme": "one sentence describing the central pattern in their entire Chaldean chart"
 }`;
+
+  console.log('[free_reading_v1.0] STEP 9 prompt string built, length:', prompt.length);
+  console.log('[free_reading_v1.0] STEP 10 returning prompt');
+
+  return prompt;
 };

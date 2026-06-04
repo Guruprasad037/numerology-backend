@@ -20,12 +20,22 @@ const Razorpay  = require('razorpay');
 const { dbRun, dbGet }            = require('../config/db');
 const { PRODUCTS, VALID_GENDERS } = require('../config/products');
 
+const FILE = 'src/routes/orders.js';
+
+function log(step, message, data = null) {
+  console.log(`[${FILE}] STEP ${step} ${message}`, data ? JSON.stringify(data) : '');
+}
+
 const razorpay = new Razorpay({
   key_id:     process.env.RAZORPAY_KEY_ID,
   key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
+console.log(`[${FILE}] >>> Razorpay instance created`);
 
 router.post('/create', async (req, res) => {
+  console.log(`[${FILE}] >>> ENTER POST /orders/create`);
+  log(1, 'Request received', { body: req.body });
+
   const {
     product_id,
 
@@ -58,44 +68,66 @@ router.post('/create', async (req, res) => {
     ? (customer_gender || subject_gender || 'Prefer not to say')
     : (subject_gender  || 'Prefer not to say');
 
+  console.log(`[${FILE}] >>> Fields resolved | resolvedCustomerName="${resolvedCustomerName}" resolvedIsSelf=${resolvedIsSelf}`);
+  console.log(`[${FILE}] >>> Subject resolved | resolvedSubjectName="${resolvedSubjectName}" resolvedSubjectDob="${resolvedSubjectDob}" resolvedSubjectGender="${resolvedSubjectGender}"`);
+
   // ── Validation ──────────────────────────────────────────────
-  if (!product_id || !resolvedCustomerName || !email || !phone)
+  console.log(`[${FILE}] >>> STEP 2 START: input validation`);
+
+  if (!product_id || !resolvedCustomerName || !email || !phone) {
+    console.log(`[${FILE}] >>> STEP 2 FAIL: missing required fields | product_id=${!!product_id} name=${!!resolvedCustomerName} email=${!!email} phone=${!!phone}`);
     return res.status(400).json({ error: 'product_id, name, email, and phone are required.' });
+  }
 
-  if (!email.includes('@'))
+  if (!email.includes('@')) {
+    console.log(`[${FILE}] >>> STEP 2 FAIL: invalid email | email="${email}"`);
     return res.status(400).json({ error: 'Please provide a valid email address.' });
+  }
 
-  if (!/^\+?[\d\s\-]{7,15}$/.test(phone.trim()))
+  if (!/^\+?[\d\s\-]{7,15}$/.test(phone.trim())) {
+    console.log(`[${FILE}] >>> STEP 2 FAIL: invalid phone | phone="${phone}"`);
     return res.status(400).json({ error: 'Please provide a valid phone number.' });
+  }
 
-  if (!resolvedSubjectName)
+  if (!resolvedSubjectName) {
+    console.log(`[${FILE}] >>> STEP 2 FAIL: subject_name missing`);
     return res.status(400).json({ error: 'subject_name is required.' });
+  }
 
-  if (!resolvedSubjectDob || !/^\d{4}-\d{2}-\d{2}$/.test(resolvedSubjectDob))
+  if (!resolvedSubjectDob || !/^\d{4}-\d{2}-\d{2}$/.test(resolvedSubjectDob)) {
+    console.log(`[${FILE}] >>> STEP 2 FAIL: invalid subject_dob | subject_dob="${resolvedSubjectDob}"`);
     return res.status(400).json({ error: 'subject_dob must be in YYYY-MM-DD format.' });
+  }
 
   // Build the product list — product_id may be a single slug or
   // a comma-separated list of slugs (e.g. "career,love")
   const slugs = product_id.split(',').map(s => s.trim()).filter(Boolean);
   const products = slugs.map(s => PRODUCTS[s]).filter(Boolean);
+  console.log(`[${FILE}] >>> STEP 2: products resolved | slugs=${JSON.stringify(slugs)} matchedCount=${products.length}`);
 
-  if (products.length === 0)
+  if (products.length === 0) {
+    console.log(`[${FILE}] >>> STEP 2 FAIL: unknown product_id | product_id="${product_id}"`);
     return res.status(400).json({ error: 'Unknown product_id.' });
+  }
 
   // Combined amount across all selected products
   const totalAmountPaise = products.reduce((sum, p) => sum + p.amount_paise, 0);
   const productNames     = products.map(p => p.name).join(' + ');
+  console.log(`[${FILE}] >>> STEP 2 DONE: validation passed | totalAmountPaise=${totalAmountPaise} productNames="${productNames}"`);
 
   try {
     // ── Step 1: Upsert customer ──────────────────────────────
-    // We match on email (primary identifier for paying customers)
+    log(3, 'Checking if customer exists by email');
+    console.log(`[${FILE}] >>> STEP 3 START: dbGet() — lookup customer by email="${email.trim()}"`);
     let customer = await dbGet(
       `SELECT id FROM customers WHERE email = $1 AND deleted_at IS NULL LIMIT 1`,
       [email.trim()]
     );
+    console.log(`[${FILE}] >>> STEP 3 DONE: customer lookup returned | found=${!!customer}`);
 
     if (customer) {
       // Update existing customer record
+      console.log(`[${FILE}] >>> STEP 3.1 START: dbRun() — updating existing customer | customerId=${customer.id}`);
       await dbRun(
         `UPDATE customers
          SET full_name  = $1,
@@ -105,26 +137,34 @@ router.post('/create', async (req, res) => {
          WHERE id = $3`,
         [resolvedCustomerName, phone.trim(), customer.id]
       );
+      console.log(`[${FILE}] >>> STEP 3.1 DONE: existing customer updated | customerId=${customer.id}`);
     } else {
       // New customer — Gender is optional for paying customers
       // (they're mandatory only for the subject)
-const result = await dbRun(
-  `INSERT INTO customers
-     (full_name, email, phone, gender, tier, locale, timezone)
-   VALUES ($1, $2, $3, $4, 'paid_reading', 'en', 'Asia/Kolkata')
-   RETURNING id`,
-  [
-    resolvedCustomerName,
-    email.trim(),
-    phone.trim(),
-    customer_gender || 'Prefer not to say',
-  ]
-);      customer = result.rows[0];
+      console.log(`[${FILE}] >>> STEP 3.2 START: dbRun() — inserting new customer`);
+      const result = await dbRun(
+        `INSERT INTO customers
+           (full_name, email, phone, gender, tier, locale, timezone)
+         VALUES ($1, $2, $3, $4, 'paid_reading', 'en', 'Asia/Kolkata')
+         RETURNING id`,
+        [
+          resolvedCustomerName,
+          email.trim(),
+          phone.trim(),
+          customer_gender || 'Prefer not to say',
+        ]
+      );
+      customer = result.rows[0];
+      console.log(`[${FILE}] >>> STEP 3.2 DONE: new customer inserted | customerId=${customer.id}`);
     }
 
     const customerId = customer.id;
+    log(4, 'Customer upserted', { customerId });
+    console.log(`[${FILE}] >>> customerId resolved | customerId=${customerId}`);
 
     // ── Step 2: Create order on Razorpay ─────────────────────
+    log(5, 'Creating Razorpay order');
+    console.log(`[${FILE}] >>> STEP 5 START: razorpay.orders.create() | amount=${totalAmountPaise} currency=INR`);
     const rp_order = await razorpay.orders.create({
       amount:   totalAmountPaise,
       currency: 'INR',
@@ -137,8 +177,11 @@ const result = await dbRun(
         is_self:       resolvedIsSelf,
       },
     });
+    console.log(`[${FILE}] >>> STEP 5 DONE: Razorpay order created | rp_order_id="${rp_order.id}"`);
 
     // ── Step 3: Insert pending order in DB ───────────────────
+    log(6, 'Inserting pending order in DB');
+    console.log(`[${FILE}] >>> STEP 6 START: dbRun() — inserting pending order | customerId=${customerId} rp_order_id="${rp_order.id}"`);
     await dbRun(
       `INSERT INTO orders
          (user_id,
@@ -169,8 +212,12 @@ const result = await dbRun(
         resolvedSubjectGender,
       ]
     );
+    console.log(`[${FILE}] >>> STEP 6 DONE: pending order inserted`);
 
     // ── Step 4: Return to frontend ────────────────────────────
+    log(7, 'Sending response to frontend');
+    console.log(`[${FILE}] >>> STEP 7: sending success response | rp_order_id="${rp_order.id}" amount_paise=${totalAmountPaise}`);
+    console.log(`[${FILE}] >>> EXIT POST /orders/create SUCCESS`);
     return res.json({
       rp_order_id:  rp_order.id,
       amount_paise: totalAmountPaise,
@@ -180,6 +227,8 @@ const result = await dbRun(
     });
 
   } catch (err) {
+    console.error(`[${FILE}] >>> STEP 99 FATAL ERROR in POST /orders/create | message="${err.message}"`);
+    console.error(`[${FILE}] >>> STACK TRACE:`, err.stack);
     console.error('Create order error:', err);
     return res.status(500).json({ error: 'Could not create payment order. Please try again.' });
   }

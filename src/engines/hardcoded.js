@@ -7,8 +7,12 @@
 
 // ── Helper ────────────────────────────────────────────────────
 function interp(table, number) {
+  console.log(`[hardcoded] interp called — number: ${number}`);
   const entry = table[number];
-  if (!entry) return null;
+  if (!entry) {
+    console.log(`[hardcoded] interp — no entry found for number: ${number}`);
+    return null;
+  }
   return {
     number,
     label:  entry.label  || null,
@@ -184,6 +188,8 @@ const MASTER_NUMBER_OPENER = {
 //  BUILD 8-CARD RESPONSE
 // ══════════════════════════════════════════════════════════════
 function buildCards(profile) {
+  console.log('[hardcoded] buildCards called with profile:', profile);
+
   const {
     name,
     birth_num,
@@ -208,6 +214,7 @@ function buildCards(profile) {
   } = profile;
 
   const firstName = (name || '').trim().split(/\s+/)[0] || 'friend';
+  console.log(`[hardcoded] resolved firstName: "${firstName}"`);
 
   // Determine master numbers list
   const masterList = (() => {
@@ -218,19 +225,23 @@ function buildCards(profile) {
   })();
   const hasMaster = masterList.length > 0;
   const primaryMaster = masterList[0] || null;
+  console.log(`[hardcoded] masterList: ${JSON.stringify(masterList)}, hasMaster: ${hasMaster}, primaryMaster: ${primaryMaster}`);
 
   // Karmic debt
   const karmicDebtList = Array.isArray(karmic_debt_numbers) && karmic_debt_numbers.length
     ? karmic_debt_numbers : [];
   const hasKarmicDebt = karmicDebtList.length > 0;
+  console.log(`[hardcoded] karmicDebtList: ${JSON.stringify(karmicDebtList)}, hasKarmicDebt: ${hasKarmicDebt}`);
 
   // Karmic lessons
   const karmicLessonsList = Array.isArray(karmic_lessons) && karmic_lessons.length
     ? karmic_lessons : [];
+  console.log(`[hardcoded] karmicLessonsList: ${JSON.stringify(karmicLessonsList)}`);
 
   // Hidden passions
   const hiddenPassionsList = Array.isArray(hidden_passions) && hidden_passions.length
     ? hidden_passions : [];
+  console.log(`[hardcoded] hiddenPassionsList: ${JSON.stringify(hiddenPassionsList)}`);
 
   // Planes
   const planeCounts = {
@@ -242,6 +253,7 @@ function buildCards(profile) {
   const sortedPlanes = Object.entries(planeCounts).sort((a, b) => b[1] - a[1]);
   const dominantPlane = sortedPlanes[0][0];
   const weakestPlane  = sortedPlanes[sortedPlanes.length - 1][0];
+  console.log(`[hardcoded] planeCounts: ${JSON.stringify(planeCounts)}, dominantPlane: "${dominantPlane}", weakestPlane: "${weakestPlane}"`);
 
   // Lookup shorthand helpers
   const birth      = READINGS[birth_num]      || {};
@@ -251,8 +263,10 @@ function buildCards(profile) {
   const personality= PERSONALITY[personality_num] || {};
   const maturity   = MATURITY[maturity_num]    || {};
   const personalYr = PERSONAL_YEAR[personal_year] || {};
+  console.log(`[hardcoded] table lookups — birth_num: ${birth_num} (found: ${!!READINGS[birth_num]}), life_path_num: ${life_path_num} (found: ${!!LIFE_PATH[life_path_num]}), expression_num: ${expression_num} (found: ${!!EXPRESSION[expression_num]}), soul_urge_num: ${soul_urge_num} (found: ${!!SOUL_URGE[soul_urge_num]}), personality_num: ${personality_num} (found: ${!!PERSONALITY[personality_num]}), maturity_num: ${maturity_num} (found: ${!!MATURITY[maturity_num]}), personal_year: ${personal_year} (found: ${!!PERSONAL_YEAR[personal_year]})`);
 
   // ── CARD 1: Your Signature ───────────────────────────────────
+  console.log('[hardcoded] building card 1');
   let card1Body = '';
   if (hasMaster && MASTER_NUMBER_OPENER[primaryMaster]) {
     card1Body = MASTER_NUMBER_OPENER[primaryMaster];
@@ -277,6 +291,7 @@ function buildCards(profile) {
   };
 
   // ── CARD 2: The Day You Were Born ────────────────────────────
+  console.log('[hardcoded] building card 2');
   const card2Body = birth.text || `Your Birth Number ${birth_num} — ${birth.label || ''} — shapes the instinctive, unfiltered version of you that existed before the world had a chance to teach you otherwise. It is the energy you return to under pressure, and the gift you carry without effort.`;
 
   const card2 = {
@@ -289,6 +304,7 @@ function buildCards(profile) {
   };
 
   // ── CARD 3: Your Life's True Direction ───────────────────────
+  console.log('[hardcoded] building card 3');
   const card3Body = lifePath.text || `Your Life Path ${life_path_num} — ${lifePath.label || ''} — is the overarching current beneath everything you do. It does not dictate your choices, but it shapes the kind of experiences that find you, and the kind of person you tend to become through them.`;
 
   const card3 = {
@@ -301,6 +317,7 @@ function buildCards(profile) {
   };
 
   // ── CARD 4: The Name You Were Given ──────────────────────────
+  console.log('[hardcoded] building card 4');
   const exprText = expression.text || `Your Expression Number ${expression_num} reveals the talents and abilities encoded in your name — the gifts you carry into every room, often without realising you are deploying them.`;
   const soulText = soulUrge.text   || `Your Soul Urge ${soul_urge_num} reveals what you privately hunger for beneath all of that — the inner need that drives your choices whether or not you consciously acknowledge it.`;
 
@@ -310,6 +327,7 @@ function buildCards(profile) {
   ]);
   const tensionKey = `${expression_num}-${soul_urge_num}`;
   const hasTension = tensionPairs.has(tensionKey);
+  console.log(`[hardcoded] tensionKey: "${tensionKey}", hasTension: ${hasTension}`);
 
   let card4Body = `${exprText.split('\n\n')[0]} Meanwhile, your Soul Urge ${soul_urge_num} — ${soulUrge.label || ''} — reveals a very different interior. ${soulText.split('\n\n')[0]}`;
   if (hasTension) {
@@ -328,6 +346,7 @@ function buildCards(profile) {
   };
 
   // ── CARD 5: How the World Sees You ───────────────────────────
+  console.log('[hardcoded] building card 5');
   const card5Body = personality.text || `Your Personality Number ${personality_num} shapes the first impression you make before you have said a single word. It is the energy others feel when you walk into a room — the outer layer of self that the world encounters first.`;
 
   const card5 = {
@@ -340,6 +359,7 @@ function buildCards(profile) {
   };
 
   // ── CARD 6: The Hidden Architecture ──────────────────────────
+  console.log('[hardcoded] building card 6');
   const dominantText = PLANE_DOMINANT[dominantPlane] || `Your dominant plane is ${dominantPlane}, which shapes how you process and respond to the world.`;
   const weakestText  = PLANE_WEAKEST[weakestPlane]   || `Your least active plane is ${weakestPlane}, which may represent an area calling for more conscious attention.`;
 
@@ -355,6 +375,7 @@ function buildCards(profile) {
   };
 
   // ── CARD 7: Shadows and Gifts ─────────────────────────────────
+  console.log('[hardcoded] building card 7');
   let card7Body = '';
   let card7AccentNum = null;
   let card7AccentLabel = null;
@@ -362,17 +383,21 @@ function buildCards(profile) {
   if (hasKarmicDebt) {
     const debtNum = karmicDebtList[0];
     const debtText = KARMIC_DEBT[debtNum] || `Your karmic debt of ${debtNum} carries a specific invitation to deep growth — a doorway, not a burden.`;
+    console.log(`[hardcoded] card 7 — using karmic debt: ${debtNum}`);
     card7Body = debtText;
     card7AccentNum = String(debtNum);
     card7AccentLabel = 'Karmic Debt';
   } else if (karmicLessonsList.length > 0) {
+    console.log(`[hardcoded] card 7 — using karmic lessons: ${JSON.stringify(karmicLessonsList)}`);
     card7Body = `Your chart shows karmic lessons in the areas of ${karmicLessonsList.join(', ')} — numbers that appear with less frequency in your name, suggesting energies that this lifetime tends to call you to develop rather than lean on naturally. These are not weaknesses; they are invitations.`;
   } else if (hiddenPassionsList.length > 0) {
+    console.log(`[hardcoded] card 7 — using hidden passions: ${JSON.stringify(hiddenPassionsList)}`);
     const passionDesc = hiddenPassionsList
       .map(n => HIDDEN_PASSION_TEXT[n] || `a deep affinity with the energy of ${n}`)
       .join('; and ');
     card7Body = `Beneath the numbers your name and birth date declare openly, your chart carries hidden passions: ${passionDesc}. These are drives so fundamental they rarely surface as conscious goals — they simply shape every choice, whether or not you have ever named them.`;
   } else {
+    console.log('[hardcoded] card 7 — using balanced distribution fallback');
     card7Body = `The deeper layers of your chart suggest a remarkably balanced distribution of energy — which carries its own particular quality. Balanced charts tend to produce people who are genuinely difficult to read: versatile, adaptive, and capable of moving through very different worlds with equal ease.`;
   }
 
@@ -389,6 +414,7 @@ function buildCards(profile) {
   };
 
   // ── CARD 8: What Lies Beneath ─────────────────────────────────
+  console.log('[hardcoded] building card 8');
   const maturityEntry = maturity;
   const card8Body = `This reading has traced the essential shape of your numerology — the numbers that define your nature, your path, your inner life, and the chapter you are currently moving through. But it has only traced the outline. Your Maturity Number ${maturity_num} — ${maturityEntry.label || ''} — describes who you are still in the process of becoming, particularly in the second half of your life, and it carries some of the most personally relevant insights in your entire chart. Your current Pinnacle cycle${current_pinnacle ? ` (${current_pinnacle})` : ''} speaks directly to the specific opportunities and tensions of this exact period of your life — and the bridge between your Soul Urge ${soul_urge_num} and your Life Path ${life_path_num} reveals an unresolved inner tension that tends to be the quiet engine behind your most significant choices. If any part of this reading has felt true, your full blueprint will feel like finally reading the book that was written about you.`;
 
@@ -408,9 +434,11 @@ function buildCards(profile) {
   ];
   // Deduplicate and take first 5
   const traits = [...new Set(rawTraits)].slice(0, 5);
+  console.log(`[hardcoded] resolved traits: ${JSON.stringify(traits)}`);
 
   // ── DOMINANT THEME ────────────────────────────────────────────
   const dominant_theme = `A ${birth.label || `Birth ${birth_num}`} walking the ${lifePath.label || `Life Path ${life_path_num}`} — ${hasMaster ? `charged with Master Number ${primaryMaster} energy` : `grounded in steady purpose`} — and shaped by a ${expression.label || `Expression ${expression_num}`} that meets the world with ${(expression.traits || [])[0] || 'depth'}.`;
+  console.log(`[hardcoded] dominant_theme: "${dominant_theme}"`);
 
   // ── CTA ───────────────────────────────────────────────────────
   const cta = {
@@ -425,13 +453,15 @@ function buildCards(profile) {
     button_text: 'Unlock My Full Blueprint',
   };
 
-  return {
+  const result = {
     first_name: firstName,
     cards: [card1, card2, card3, card4, card5, card6, card7, card8],
     cta,
     traits,
     dominant_theme,
   };
+  console.log(`[hardcoded] buildCards complete — returning result for "${firstName}" with ${result.cards.length} cards`);
+  return result;
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -439,9 +469,12 @@ function buildCards(profile) {
 //  Returns the same JSON shape as claude.js and openai.js
 // ══════════════════════════════════════════════════════════════
 function run(service, profile) {
+  console.log(`[hardcoded] run called — service: "${service}"`);
   // All services route here; currently only free_reading is
   // fully implemented. Paid services fall back gracefully.
-  return buildCards(profile);
+  const result = buildCards(profile);
+  console.log(`[hardcoded] run complete — service: "${service}"`);
+  return result;
 }
 
 module.exports = { run };

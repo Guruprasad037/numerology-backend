@@ -20,9 +20,12 @@ function log(step, message, data = null) {
  */
 async function generate(name, dob) {
   log(1, 'generate() called', { name, dob });
+  console.log(`[${FILE}] >>> ENTER generate() | name="${name}" dob="${dob}"`);
 
   // ── Step 1: Build full Chaldean profile (all 83+ fields) ─────
+  console.log(`[${FILE}] >>> STEP 1 START: buildNumerologyProfile()`);
   const profile = buildNumerologyProfile(name, dob);
+  console.log(`[${FILE}] >>> STEP 1 DONE: profile built | keys=${Object.keys(profile).length}`);
 
   log(2, 'Profile calculated', {
     psychic_number:     profile.psychic_number,
@@ -44,29 +47,38 @@ async function generate(name, dob) {
     has_master_11:      profile.has_master_11,
     missing_numbers:    profile.missing_numbers,
   });
+  console.log(`[${FILE}] >>> STEP 2 DONE: profile logged`);
 
   try {
     // ── Step 2: Engine dispatch ───────────────────────────────────
     log(3, 'Dispatching to engine: free_reading');
+    console.log(`[${FILE}] >>> STEP 3 START: dispatcher.dispatch("free_reading")`);
     const interpretations = await dispatcher.dispatch('free_reading', profile);
+    console.log(`[${FILE}] >>> STEP 3 DONE: dispatch returned | interpretations=${interpretations ? 'object' : 'null/undefined'}`);
 
     log(4, 'Engine response received', {
       keys:      interpretations ? Object.keys(interpretations) : null,
       hasCards:  !!interpretations?.cards,
       cardCount: interpretations?.cards?.length || 0,
     });
+    console.log(`[${FILE}] >>> STEP 4 DONE: engine response logged`);
 
     // ── Step 3: Fire-and-forget DB save ──────────────────────────
+    console.log(`[${FILE}] >>> STEP 5 START: saveReading() (fire-and-forget)`);
     saveReading(name, dob, profile, interpretations).catch(err =>
       console.error(`[${FILE}] DB save failed (non-fatal):`, err.message)
     );
     log(5, 'DB save triggered (non-blocking)');
+    console.log(`[${FILE}] >>> STEP 5 DONE: saveReading() triggered`);
 
     // ── Step 4: Detect engine version ────────────────────────────
+    console.log(`[${FILE}] >>> STEP 6 START: detecting engine version`);
     const isV1 = Array.isArray(interpretations?.cards);
     log(6, 'Engine version detected', { isV1 });
+    console.log(`[${FILE}] >>> STEP 6 DONE: isV1=${isV1}`);
 
     // ── Step 5: Core numbers — always sent to frontend ───────────
+    console.log(`[${FILE}] >>> STEP 6.2 START: building coreNumbers object`);
     const coreNumbers = {
       psychic_number:        profile.psychic_number,
       psychic_compound:      profile.psychic_compound,
@@ -99,10 +111,12 @@ async function generate(name, dob) {
       dominant_plane:        profile.dominant_plane,
       essence_number:        profile.essence_number,
     };
+    console.log(`[${FILE}] >>> STEP 6.2 DONE: coreNumbers built | keys=${Object.keys(coreNumbers).length}`);
 
     let result;
 
     if (isV1) {
+      console.log(`[${FILE}] >>> STEP 6.3 START: building result (V1 engine path)`);
       result = {
         name,
         dob_fmt: profile.dob_fmt,
@@ -114,9 +128,11 @@ async function generate(name, dob) {
         dominant_theme: interpretations.dominant_theme || '',
         reading:        interpretations.cards?.[0]?.body || null,
       };
+      console.log(`[${FILE}] >>> STEP 6.3 DONE: V1 result built | cards=${result.cards.length} traits=${result.traits.length} hasCTA=${!!result.cta}`);
     } else {
       // Legacy hardcoded engine path
       log('6.1', 'Legacy engine detected (non-v1)');
+      console.log(`[${FILE}] >>> STEP 6.1 START: building result (legacy engine path)`);
       const firstCard = interpretations?.birth || {};
       result = {
         name,
@@ -129,6 +145,7 @@ async function generate(name, dob) {
         cta:            null,
         dominant_theme: '',
       };
+      console.log(`[${FILE}] >>> STEP 6.1 DONE: legacy result built | hasReading=${!!result.reading} traits=${result.traits.length}`);
     }
 
     log(7, 'Final response built', {
@@ -136,11 +153,15 @@ async function generate(name, dob) {
       hasCTA:     !!result.cta,
       traitCount: result.traits?.length || 0,
     });
+    console.log(`[${FILE}] >>> STEP 7 DONE: final result ready | cardCount=${result.cards?.length || 0} hasCTA=${!!result.cta} traitCount=${result.traits?.length || 0}`);
+    console.log(`[${FILE}] >>> EXIT generate() SUCCESS`);
 
     return result;
 
   } catch (err) {
     log(99, 'ERROR in generate()', { message: err.message, stack: err.stack });
+    console.error(`[${FILE}] >>> STEP 99 FATAL ERROR in generate() | message="${err.message}"`);
+    console.error(`[${FILE}] >>> STACK TRACE:`, err.stack);
     throw err;
   }
 }

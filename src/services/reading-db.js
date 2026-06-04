@@ -16,18 +16,22 @@ function log(step, message, data = null) {
 
 async function saveReading(name, dob, profile, interpretations, engineUsed = null) {
   log(1, "saveReading() called", { name, dob });
+  console.log(`[${FILE}] >>> ENTER saveReading() | name="${name}" dob="${dob}" engineUsed=${engineUsed}`);
 
   // ── 1. Upsert customer ───────────────────────────────────────
   log(2, "Checking if customer exists");
+  console.log(`[${FILE}] >>> STEP 2 START: dbGet() — checking existing customer`);
   let customer = await dbGet(
     `SELECT id FROM customers
      WHERE full_name = $1 AND dob = $2 AND deleted_at IS NULL
      LIMIT 1`,
     [name, dob]
   );
+  console.log(`[${FILE}] >>> STEP 2 DONE: customer query returned | found=${!!customer}`);
 
   if (!customer) {
     log(3, "Creating new customer");
+    console.log(`[${FILE}] >>> STEP 3 START: dbRun() — inserting new customer`);
     const result = await dbRun(
       `INSERT INTO customers (full_name, dob, tier, locale, timezone)
        VALUES ($1, $2, 'free_reading', 'en', 'Asia/Kolkata')
@@ -36,23 +40,29 @@ async function saveReading(name, dob, profile, interpretations, engineUsed = nul
     );
     customer = result.rows[0];
     log(4, "Customer created", { customerId: customer.id });
+    console.log(`[${FILE}] >>> STEP 3 DONE: new customer inserted | customerId=${customer.id}`);
   } else {
     log(3, "Existing customer found", { customerId: customer.id });
+    console.log(`[${FILE}] >>> STEP 3 SKIP: customer already exists | customerId=${customer.id}`);
   }
 
   const userId = customer.id;
+  console.log(`[${FILE}] >>> userId resolved | userId=${userId}`);
 
   // ── 2. Demote any existing primary profile ───────────────────
   log(5, "Demoting previous primary profile");
+  console.log(`[${FILE}] >>> STEP 5 START: dbRun() — demoting existing primary profile for userId=${userId}`);
   await dbRun(
     `UPDATE numerology_profiles
      SET is_primary = FALSE
      WHERE user_id = $1 AND is_primary = TRUE`,
     [userId]
   );
+  console.log(`[${FILE}] >>> STEP 5 DONE: demote query completed`);
 
   // ── 3. Insert full v3 numerology profile ─────────────────────
   log(6, "Inserting numerology profile (v3, 89 params)");
+  console.log(`[${FILE}] >>> STEP 6 START: dbRun() — inserting numerology profile | userId=${userId} name="${name}"`);
 
   const profileResult = await dbRun(
     `INSERT INTO numerology_profiles (
@@ -252,11 +262,14 @@ async function saveReading(name, dob, profile, interpretations, engineUsed = nul
 
   const profileId = profileResult.rows[0].id;
   log(7, "Profile inserted", { profileId });
+  console.log(`[${FILE}] >>> STEP 6 DONE: numerology profile inserted | profileId=${profileId}`);
 
   // ── 4. Insert reading record ─────────────────────────────────
   log(8, "Inserting reading record");
+  console.log(`[${FILE}] >>> STEP 8 START: dbRun() — inserting reading record | userId=${userId} profileId=${profileId}`);
 
   const engine = engineUsed || require('../reading.settings').defaultEngine;
+  console.log(`[${FILE}] >>> STEP 8 engine resolved | engine="${engine}"`);
 
   await dbRun(
     `INSERT INTO readings (
@@ -277,8 +290,10 @@ async function saveReading(name, dob, profile, interpretations, engineUsed = nul
       engine,
     ]
   );
+  console.log(`[${FILE}] >>> STEP 8 DONE: reading record inserted`);
 
   log(9, "Reading saved successfully", { userId, profileId });
+  console.log(`[${FILE}] >>> EXIT saveReading() SUCCESS | userId=${userId} profileId=${profileId}`);
   return { userId, profileId };
 }
 

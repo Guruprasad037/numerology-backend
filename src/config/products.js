@@ -5,6 +5,7 @@
 // ============================================================
 
 const VALID_GENDERS = ['Male', 'Female', 'Prefer not to say'];
+console.log('[products.js] VALID_GENDERS loaded:', VALID_GENDERS);
 
 const PRODUCTS = {
   career: {
@@ -28,5 +29,9 @@ const PRODUCTS = {
     amount_paise: 100,
   },
 };
+console.log('[products.js] PRODUCTS loaded:', JSON.stringify(PRODUCTS, null, 2));
+console.log('[products.js] Total products available:', Object.keys(PRODUCTS).length);
+console.log('[products.js] Product slugs:', Object.keys(PRODUCTS));
 
 module.exports = { PRODUCTS, VALID_GENDERS };
+console.log('[products.js] Exports ready: { PRODUCTS, VALID_GENDERS }');

@@ -6,6 +6,8 @@
 //    1. Profile insert now uses correct Chaldean v3 column names
 //    2. Reading is actually generated + email triggered after capture
 //    3. res.json() called immediately, processing happens async
+//    4. subject_dob from DB is a Date object — converted to string
+//       before passing to buildNumerologyProfile()
 // ============================================================
 const express  = require('express');
 const router   = express.Router();
@@ -136,8 +138,15 @@ router.post('/', async (req, res) => {
     // ── 4. Build numerology profile ─────────────────────────────
     // Use subject fields from the order (set at purchase time).
     const subjectName = order.subject_name || order.customer_full_name;
-    const subjectDob  = order.subject_dob  || order.customer_dob;
-    console.log(`[${FILE}] >>> STEP 8: subject resolved | subjectName="${subjectName}" subjectDob="${subjectDob}"`);
+    const rawDob      = order.subject_dob  || order.customer_dob;
+
+    // FIX: pg returns DATE columns as JS Date objects, not strings.
+    // buildNumerologyProfile() calls dob.split('-') and expects "YYYY-MM-DD".
+    const subjectDob = rawDob instanceof Date
+      ? rawDob.toISOString().split('T')[0]   // Date → "2003-11-12"
+      : String(rawDob);                      // already a string — leave it
+
+    console.log(`[${FILE}] >>> STEP 8: subject resolved | subjectName="${subjectName}" rawDob="${rawDob}" subjectDob="${subjectDob}"`);
 
     // Build the profile (needed for both the DB insert and engine dispatch)
     log(8, 'Building numerology profile');

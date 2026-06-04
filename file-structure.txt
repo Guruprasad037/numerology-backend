@@ -30,7 +30,6 @@ numerology-backend/
   src/routes/webhook.js
 
   src/services/free-reading.js
-  src/services/paid-reading.js (empty)
   src/services/reading-db.js
 
   src/utils/calculator.js

@@ -106,22 +106,20 @@ router.post('/create', async (req, res) => {
         [resolvedCustomerName, phone.trim(), customer.id]
       );
     } else {
-      // New customer — DOB and gender are optional for paying customers
+      // New customer — Gender is optional for paying customers
       // (they're mandatory only for the subject)
-      const result = await dbRun(
-        `INSERT INTO customers
-           (full_name, dob, email, phone, gender, tier, locale, timezone)
-         VALUES ($1, $2, $3, $4, $5, 'paid_reading', 'en', 'Asia/Kolkata')
-         RETURNING id`,
-        [
-          resolvedCustomerName,
-          customer_dob || resolvedSubjectDob,  // fallback to subject dob when is_self
-          email.trim(),
-          phone.trim(),
-          customer_gender || 'Prefer not to say',
-        ]
-      );
-      customer = result.rows[0];
+const result = await dbRun(
+  `INSERT INTO customers
+     (full_name, email, phone, gender, tier, locale, timezone)
+   VALUES ($1, $2, $3, $4, 'paid_reading', 'en', 'Asia/Kolkata')
+   RETURNING id`,
+  [
+    resolvedCustomerName,
+    email.trim(),
+    phone.trim(),
+    customer_gender || 'Prefer not to say',
+  ]
+);      customer = result.rows[0];
     }
 
     const customerId = customer.id;

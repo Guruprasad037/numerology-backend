@@ -11,6 +11,12 @@
 //    GET  /admin/pending               — readings pending delivery
 //    POST /admin/readings/:id/deliver  — mark reading as delivered
 //    GET  /admin/leads/export          — CSV export of free customers
+//
+//  Schema: Chaldean numerology_profiles (schema_version = 2)
+//  Columns used: psychic_number, destiny_number, name_number,
+//                soul_urge_number, personality_number, maturity_number,
+//                power_number, personal_year_number, ruling_planet,
+//                pd_combination, missing_numbers
 // ============================================================
 
 const express = require('express');
@@ -30,30 +36,51 @@ router.get('/dashboard', async (req, res) => {
     const [customerStats, orderStats, readingStats, recentOrders, pendingReadings] =
       await Promise.all([
         // Customer counts by tier
-        dbAll(`SELECT tier, COUNT(*) AS count FROM customers WHERE deleted_at IS NULL GROUP BY tier`),
+        dbAll(
+          `SELECT tier, COUNT(*) AS count
+           FROM customers
+           WHERE deleted_at IS NULL
+           GROUP BY tier`
+        ),
 
         // Order totals by status
-        dbAll(`SELECT status, COUNT(*) AS count, COALESCE(SUM(final_amount), 0) AS total
-               FROM orders GROUP BY status`),
+        dbAll(
+          `SELECT status,
+                  COUNT(*) AS count,
+                  COALESCE(SUM(final_amount), 0) AS total
+           FROM orders
+           GROUP BY status`
+        ),
 
         // Reading counts by status
-        dbAll(`SELECT status, COUNT(*) AS count FROM readings GROUP BY status`),
+        dbAll(
+          `SELECT status, COUNT(*) AS count
+           FROM readings
+           GROUP BY status`
+        ),
 
-        // 5 most recent paid orders — show customer info + subject info
-        dbAll(`SELECT o.id,
-                      c.full_name AS customer_name, c.email,
-                      o.customer_name, o.subject_name, o.subject_dob,
-                      o.is_self,
-                      o.product_name, o.final_amount,
-                      o.currency, o.status, o.created_at
-               FROM orders o
-               JOIN customers c ON c.id = o.user_id
-               WHERE o.status = 'paid'
-               ORDER BY o.created_at DESC LIMIT 5`),
+        // 5 most recent paid orders — customer info + subject info
+        dbAll(
+          `SELECT o.id,
+                  c.full_name AS customer_full_name, c.email,
+                  o.customer_name, o.subject_name, o.subject_dob,
+                  o.is_self,
+                  o.product_name, o.final_amount,
+                  o.currency, o.status, o.created_at
+           FROM orders o
+           JOIN customers c ON c.id = o.user_id
+           WHERE o.status = 'paid'
+           ORDER BY o.created_at DESC
+           LIMIT 5`
+        ),
 
         // Count of undelivered paid readings
-        dbGet(`SELECT COUNT(*) AS count FROM readings
-               WHERE status = 'pending' AND order_id IS NOT NULL`),
+        dbGet(
+          `SELECT COUNT(*) AS count
+           FROM readings
+           WHERE status = 'pending'
+             AND order_id IS NOT NULL`
+        ),
       ]);
 
     const paid = orderStats.find(r => r.status === 'paid');
@@ -74,7 +101,7 @@ router.get('/dashboard', async (req, res) => {
 
 
 // ─────────────────────────────────────────────
-// CUSTOMERS  (was: USERS)
+// CUSTOMERS
 // ─────────────────────────────────────────────
 
 router.get('/customers', async (req, res) => {
@@ -85,14 +112,16 @@ router.get('/customers', async (req, res) => {
       ? await dbAll(
           `SELECT id, full_name, dob, email, phone, gender, tier, locale,
                   created_at, deleted_at
-           FROM customers WHERE tier = $1 AND deleted_at IS NULL
+           FROM customers
+           WHERE tier = $1 AND deleted_at IS NULL
            ORDER BY created_at DESC`,
           [tier]
         )
       : await dbAll(
           `SELECT id, full_name, dob, email, phone, gender, tier, locale,
                   created_at, deleted_at
-           FROM customers WHERE deleted_at IS NULL
+           FROM customers
+           WHERE deleted_at IS NULL
            ORDER BY created_at DESC`
         );
 
@@ -103,7 +132,7 @@ router.get('/customers', async (req, res) => {
   }
 });
 
-// Keep /admin/users as an alias so any existing integrations don't break
+// Alias — keeps any existing integrations working
 router.get('/users', async (req, res) => {
   req.url = '/customers';
   router.handle(req, res);
@@ -111,18 +140,50 @@ router.get('/users', async (req, res) => {
 
 
 // ─────────────────────────────────────────────
-// NUMEROLOGY PROFILES
+// NUMEROLOGY PROFILES  (Chaldean schema v2)
 // ─────────────────────────────────────────────
 
 router.get('/profiles', async (req, res) => {
   try {
     const rows = await dbAll(
-      `SELECT np.id, np.user_id, c.full_name, np.name_used, np.dob_used,
-              np.life_path_number, np.birth_day_number, np.expression_number,
-              np.soul_urge_number, np.personality_number, np.maturity_number,
-              np.personal_year_number, np.has_master_11, np.has_master_22,
-              np.has_master_33, np.has_karmic_debt, np.karmic_debt_numbers,
-              np.is_primary, np.calculated_at
+      `SELECT np.id,
+              np.user_id,
+              c.full_name,
+              np.name_used,
+              np.birth_name_used,
+              np.dob_used,
+              np.is_primary,
+
+              -- DOB-based
+              np.psychic_number,
+              np.psychic_compound,
+              np.destiny_number,
+              np.destiny_compound,
+              np.personal_year_number,
+              np.ruling_planet,
+
+              -- Name-based
+              np.name_number,
+              np.name_compound,
+              np.soul_urge_number,
+              np.soul_urge_compound,
+              np.personality_number,
+              np.personality_compound,
+
+              -- Birth name (optional)
+              np.birth_name_number,
+              np.birth_name_compound,
+
+              -- Derived
+              np.maturity_number,
+              np.power_number,
+
+              -- Chaldean-specific
+              np.missing_numbers,
+              np.pd_combination,
+
+              np.schema_version,
+              np.calculated_at
        FROM numerology_profiles np
        JOIN customers c ON c.id = np.user_id
        WHERE np.is_primary = TRUE
@@ -181,11 +242,21 @@ router.get('/readings', async (req, res) => {
 
     const rows = (status && status !== 'all')
       ? await dbAll(
-          `SELECT r.id, r.user_id,
-                  c.full_name AS customer_full_name, c.email,
-                  o.customer_name, o.subject_name, o.subject_dob, o.is_self,
-                  r.product_slug, r.status, r.engine_used,
-                  r.delivered_to, r.generated_at, r.delivered_at, r.created_at,
+          `SELECT r.id,
+                  r.user_id,
+                  c.full_name AS customer_full_name,
+                  c.email,
+                  o.customer_name,
+                  o.subject_name,
+                  o.subject_dob,
+                  o.is_self,
+                  r.product_slug,
+                  r.status,
+                  r.engine_used,
+                  r.delivered_to,
+                  r.generated_at,
+                  r.delivered_at,
+                  r.created_at,
                   r.order_id
            FROM readings r
            JOIN customers c ON c.id = r.user_id
@@ -195,11 +266,21 @@ router.get('/readings', async (req, res) => {
           [status]
         )
       : await dbAll(
-          `SELECT r.id, r.user_id,
-                  c.full_name AS customer_full_name, c.email,
-                  o.customer_name, o.subject_name, o.subject_dob, o.is_self,
-                  r.product_slug, r.status, r.engine_used,
-                  r.delivered_to, r.generated_at, r.delivered_at, r.created_at,
+          `SELECT r.id,
+                  r.user_id,
+                  c.full_name AS customer_full_name,
+                  c.email,
+                  o.customer_name,
+                  o.subject_name,
+                  o.subject_dob,
+                  o.is_self,
+                  r.product_slug,
+                  r.status,
+                  r.engine_used,
+                  r.delivered_to,
+                  r.generated_at,
+                  r.delivered_at,
+                  r.created_at,
                   r.order_id
            FROM readings r
            JOIN customers c ON c.id = r.user_id
@@ -216,28 +297,71 @@ router.get('/readings', async (req, res) => {
 
 
 // ─────────────────────────────────────────────
-// PENDING READINGS (action queue)
-// Paid orders where report hasn't been delivered yet
+// PENDING READINGS  (your manual fulfilment queue)
+// Paid orders where report hasn't been delivered yet.
+// Shows all the Chaldean numbers you need to write the report.
 // ─────────────────────────────────────────────
 
 router.get('/pending', async (req, res) => {
   try {
     const rows = await dbAll(
-      `SELECT r.id AS reading_id,
-              c.full_name AS customer_full_name, c.email, c.phone,
-              o.customer_name, o.subject_name, o.subject_dob, o.subject_gender,
+      `SELECT
+              -- Reading & order identifiers
+              r.id              AS reading_id,
+              r.product_slug,
+              r.created_at      AS reading_created_at,
+
+              -- Customer (the person who paid)
+              c.full_name       AS customer_full_name,
+              c.email,
+              c.phone,
+              o.customer_name,
+
+              -- Subject (whose numbers are being read)
+              o.subject_name,
+              o.subject_dob,
+              o.subject_gender,
               o.is_self,
-              np.life_path_number, np.birth_day_number, np.expression_number,
-              np.soul_urge_number, np.personality_number, np.maturity_number,
-              np.personal_year_number, np.has_master_11, np.has_master_22,
-              np.has_master_33, np.karmic_debt_numbers, np.dob_used,
-              r.product_slug, r.created_at AS reading_created_at,
-              o.final_amount, o.currency, o.paid_at
+
+              -- Payment
+              o.final_amount,
+              o.currency,
+              o.paid_at,
+
+              -- Chaldean profile (for writing the report)
+              np.name_used,
+              np.birth_name_used,
+              np.dob_used,
+
+              np.psychic_number,
+              np.psychic_compound,
+              np.destiny_number,
+              np.destiny_compound,
+              np.personal_year_number,
+              np.ruling_planet,
+
+              np.name_number,
+              np.name_compound,
+              np.soul_urge_number,
+              np.soul_urge_compound,
+              np.personality_number,
+              np.personality_compound,
+
+              np.birth_name_number,
+              np.birth_name_compound,
+
+              np.maturity_number,
+              np.power_number,
+
+              np.missing_numbers,
+              np.pd_combination
+
        FROM readings r
-       JOIN customers c ON c.id = r.user_id
-       JOIN numerology_profiles np ON np.id = r.profile_id
-       LEFT JOIN orders o ON o.id = r.order_id
-       WHERE r.status = 'pending' AND r.order_id IS NOT NULL
+       JOIN customers c  ON c.id  = r.user_id
+       LEFT JOIN orders o         ON o.id  = r.order_id
+       LEFT JOIN numerology_profiles np ON np.id = r.profile_id
+       WHERE r.status = 'pending'
+         AND r.order_id IS NOT NULL
        ORDER BY r.created_at ASC`
     );
 
@@ -271,9 +395,11 @@ router.post('/readings/:id/deliver', async (req, res) => {
       [delivered_to, report_text, req.params.id]
     );
 
-    // Upgrade customer tier to 'paid_reading' if still on free
+    // Upgrade customer tier if still on free
     await dbRun(
-      `UPDATE customers SET tier = 'paid_reading', updated_at = NOW()
+      `UPDATE customers
+       SET tier       = 'paid_reading',
+           updated_at = NOW()
        WHERE id = (SELECT user_id FROM readings WHERE id = $1)
          AND tier = 'free_reading'`,
       [req.params.id]
@@ -288,16 +414,35 @@ router.post('/readings/:id/deliver', async (req, res) => {
 
 
 // ─────────────────────────────────────────────
-// CSV EXPORT — free customers / leads
+// CSV EXPORT — all customers / leads
 // ─────────────────────────────────────────────
 
 router.get('/leads/export', async (req, res) => {
   try {
     const rows = await dbAll(
-      `SELECT c.id, c.created_at, c.full_name, c.email, c.phone, c.dob,
-              c.gender, c.tier,
-              np.life_path_number, np.expression_number,
-              np.birth_day_number, np.personal_year_number
+      `SELECT
+              c.id,
+              c.created_at,
+              c.full_name,
+              c.email,
+              c.phone,
+              c.dob,
+              c.gender,
+              c.tier,
+
+              -- Chaldean profile numbers
+              np.psychic_number,
+              np.destiny_number,
+              np.name_number,
+              np.soul_urge_number,
+              np.personality_number,
+              np.maturity_number,
+              np.power_number,
+              np.personal_year_number,
+              np.ruling_planet,
+              np.pd_combination,
+              np.missing_numbers
+
        FROM customers c
        LEFT JOIN numerology_profiles np
          ON np.user_id = c.id AND np.is_primary = TRUE
@@ -305,25 +450,39 @@ router.get('/leads/export', async (req, res) => {
        ORDER BY c.created_at DESC`
     );
 
-    const header = 'ID,Created At,Name,Email,Phone,DOB,Gender,Tier,Life Path,Expression,Birth Day,Personal Year';
+    const header = [
+      'ID', 'Created At', 'Name', 'Email', 'Phone', 'DOB', 'Gender', 'Tier',
+      'Psychic Number', 'Destiny Number', 'Name Number',
+      'Soul Urge', 'Personality', 'Maturity', 'Power Number',
+      'Personal Year', 'Ruling Planet', 'PD Combination', 'Missing Numbers',
+    ].join(',');
+
     const csv = [
       header,
-      ...rows.map(r =>
-        [
-          r.id,
-          r.created_at,
-          `"${r.full_name}"`,
-          r.email || '',
-          r.phone || '',
-          r.dob,
-          r.gender || '',
-          r.tier,
-          r.life_path_number || '',
-          r.expression_number || '',
-          r.birth_day_number || '',
-          r.personal_year_number || '',
-        ].join(',')
-      ),
+      ...rows.map(r => [
+        r.id,
+        r.created_at,
+        `"${(r.full_name || '').replace(/"/g, '""')}"`,
+        r.email        || '',
+        r.phone        || '',
+        r.dob          || '',
+        r.gender       || '',
+        r.tier,
+        r.psychic_number       || '',
+        r.destiny_number       || '',
+        r.name_number          || '',
+        r.soul_urge_number     || '',
+        r.personality_number   || '',
+        r.maturity_number      || '',
+        r.power_number         || '',
+        r.personal_year_number || '',
+        r.ruling_planet        || '',
+        r.pd_combination       || '',
+        // missing_numbers is a Postgres array — convert to readable string
+        Array.isArray(r.missing_numbers)
+          ? `"${r.missing_numbers.join(', ')}"`
+          : (r.missing_numbers || ''),
+      ].join(',')),
     ].join('\n');
 
     res.setHeader('Content-Type', 'text/csv');

@@ -1,6 +1,7 @@
 // ============================================================
 //  src/services/reading-db.js
 // ============================================================
+
 const { dbRun, dbGet } = require('../config/db');
 const FILE = "src/services/reading-db.js";
 
@@ -14,16 +15,8 @@ function log(step, message, data = null) {
 async function saveReading(name, dob, profile, interpretations) {
   log(1, "saveReading() called", { name, dob });
 
-  const {
-    birth_num, life_path_num, expression_num,
-    soul_urge_num, personality_num, maturity_num,
-    personal_year, master_number,
-  } = profile;
-
-  log(2, "Profile destructured");
-
   // ── 1. Upsert customer ───────────────────────────────────────
-  log(3, "Checking if customer exists");
+  log(2, "Checking if customer exists");
   let customer = await dbGet(
     `SELECT id FROM customers
      WHERE full_name = $1 AND dob = $2 AND deleted_at IS NULL
@@ -31,10 +24,10 @@ async function saveReading(name, dob, profile, interpretations) {
     [name, dob]
   );
 
-  log(4, "Customer lookup result", { found: !!customer });
+  log(3, "Customer lookup result", { found: !!customer });
 
   if (!customer) {
-    log(5, "Creating new customer");
+    log(4, "Creating new customer");
     const result = await dbRun(
       `INSERT INTO customers (full_name, dob, tier, locale, timezone)
        VALUES ($1, $2, 'free_reading', 'en', 'Asia/Kolkata')
@@ -42,13 +35,13 @@ async function saveReading(name, dob, profile, interpretations) {
       [name, dob]
     );
     customer = result.rows[0];
-    log(6, "Customer created", { customerId: customer.id });
+    log(5, "Customer created", { customerId: customer.id });
   }
 
   const userId = customer.id;
 
-  // ── 2. Insert numerology profile ─────────────────────────────
-  log(7, "Updating previous primary profile");
+  // ── 2. Demote any existing primary profile ───────────────────
+  log(6, "Demoting previous primary profile");
   await dbRun(
     `UPDATE numerology_profiles
      SET is_primary = FALSE
@@ -56,44 +49,94 @@ async function saveReading(name, dob, profile, interpretations) {
     [userId]
   );
 
-  log(8, "Inserting new numerology profile");
+  // ── 3. Insert new Chaldean numerology profile ────────────────
+  log(7, "Inserting new numerology profile");
   const profileResult = await dbRun(
     `INSERT INTO numerology_profiles (
-       user_id, name_used, dob_used, is_primary,
-       life_path_number, birth_day_number,
-       expression_number, soul_urge_number, personality_number,
-       maturity_number, personal_year_number,
-       has_master_11, has_master_22, has_master_33,
-       master_numbers_found
+       user_id,
+       name_used,
+       birth_name_used,
+       dob_used,
+       is_primary,
+
+       psychic_number,
+       psychic_compound,
+       destiny_number,
+       destiny_compound,
+       personal_year_number,
+       ruling_planet,
+
+       name_number,
+       name_compound,
+       soul_urge_number,
+       soul_urge_compound,
+       personality_number,
+       personality_compound,
+
+       birth_name_number,
+       birth_name_compound,
+
+       maturity_number,
+       power_number,
+
+       missing_numbers,
+       pd_combination
      ) VALUES (
-       $1, $2, $3, TRUE,
-       $4, $5, $6, $7, $8,
-       $9, $10,
-       $11, $12, $13, $14
+       $1,  $2,  $3,  $4,  TRUE,
+       $5,  $6,  $7,  $8,  $9,  $10,
+       $11, $12, $13, $14, $15, $16,
+       $17, $18,
+       $19, $20,
+       $21, $22
      ) RETURNING id`,
     [
-      userId, name, dob,
-      life_path_num, birth_num,
-      expression_num, soul_urge_num, personality_num,
-      maturity_num, personal_year,
-      master_number === 11,
-      master_number === 22,
-      master_number === 33,
-      master_number ? [master_number] : [],
+      userId,                        // $1
+      profile.name_used,             // $2
+      profile.birth_name_used,       // $3  — null if not provided
+      dob,                           // $4
+
+      profile.psychic_number,        // $5
+      profile.psychic_compound,      // $6
+      profile.destiny_number,        // $7
+      profile.destiny_compound,      // $8
+      profile.personal_year_number,  // $9
+      profile.ruling_planet,         // $10
+
+      profile.name_number,           // $11
+      profile.name_compound,         // $12
+      profile.soul_urge_number,      // $13
+      profile.soul_urge_compound,    // $14
+      profile.personality_number,    // $15
+      profile.personality_compound,  // $16
+
+      profile.birth_name_number,     // $17 — null if not provided
+      profile.birth_name_compound,   // $18 — null if not provided
+
+      profile.maturity_number,       // $19
+      profile.power_number,          // $20
+
+      profile.missing_numbers,       // $21 — array e.g. [3,7]
+      profile.pd_combination,        // $22 — e.g. '5-5'
     ]
   );
 
   const profileId = profileResult.rows[0].id;
-  log(9, "Profile inserted", { profileId });
+  log(8, "Profile inserted", { profileId });
 
-  // ── 3. Insert reading record ──────────────────────────────────
-  log(10, "Inserting reading record");
+  // ── 4. Insert reading record ─────────────────────────────────
+  log(9, "Inserting reading record");
   await dbRun(
     `INSERT INTO readings (
-       user_id, profile_id, order_id,
-       product_slug, status,
-       report_content, engine_used, language,
-       generated_at, delivered_at
+       user_id,
+       profile_id,
+       order_id,
+       product_slug,
+       status,
+       report_content,
+       engine_used,
+       language,
+       generated_at,
+       delivered_at
      ) VALUES (
        $1, $2, NULL,
        'free_reading_v1', 'delivered',
@@ -108,7 +151,7 @@ async function saveReading(name, dob, profile, interpretations) {
     ]
   );
 
-  log(11, "Reading saved successfully", { userId, profileId });
+  log(10, "Reading saved successfully", { userId, profileId });
 }
 
 module.exports = { saveReading };

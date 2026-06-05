@@ -1,69 +1,68 @@
 // ============================================================
 //  src/routes/webhook.js
-//  POST /webhook/razorpay
+//  v3 — Integrated with paid-reading service
 //
-//  v2 — Manual fulfilment flow
-//
-//  CHANGES from v1:
-//    - Reading is inserted with status = 'pending' (not 'generated')
-//    - The auto email + mark-delivered block is REMOVED
-//      (email delivery is now manual via the admin Fulfilment Queue)
-//    - engine_config column added to INSERT
-//    - engine_used still recorded (what actually ran)
-//    - _engine_config / _engine_used tags read from dispatcher result
+//  CHANGE from v2:
+//    - Calls paid-reading.handlePaidReading() instead of inline logic
+//    - Respects PAID_REPORT_DELIVERY_MODE setting
+//    - MODE 1: Reading inserted as pending
+//    - MODE 2: Reading auto-generated as generated + DOCX created
 // ============================================================
-const express  = require('express');
-const router   = express.Router();
-const crypto   = require('crypto');
-const { dbRun, dbGet }           = require('../config/db');
-const { buildNumerologyProfile } = require('../utils/calculator');
-const dispatcher                 = require('../engines/dispatcher');
+const express = require("express");
+const router = express.Router();
+const crypto = require("crypto");
+const { dbRun, dbGet } = require("../config/db");
+const { buildNumerologyProfile } = require("../utils/calculator");
+const { handlePaidReading } = require("../services/paid-reading");
 
-const FILE = 'src/routes/webhook.js';
+const FILE = "src/routes/webhook.js";
 
 function log(step, message, data = null) {
-  console.log(`[${FILE}] STEP ${step} ${message}`, data ? JSON.stringify(data) : '');
+  console.log(
+    `[${FILE}] STEP ${step} ${message}`,
+    data ? JSON.stringify(data, null, 2) : ""
+  );
 }
 
-router.post('/', async (req, res) => {
+router.post("/", async (req, res) => {
   console.log(`[${FILE}] >>> ENTER POST /webhook/razorpay`);
 
   // ── Signature verification ──────────────────────────────────
-  log(1, 'Verifying Razorpay signature');
-  const receivedSig = req.headers['x-razorpay-signature'];
+  log(1, "Verifying Razorpay signature");
+  const receivedSig = req.headers["x-razorpay-signature"];
   const expectedSig = crypto
-    .createHmac('sha256', process.env.RAZORPAY_WEBHOOK_SECRET)
+    .createHmac("sha256", process.env.RAZORPAY_WEBHOOK_SECRET)
     .update(req.body)
-    .digest('hex');
+    .digest("hex");
 
   if (receivedSig !== expectedSig) {
     console.warn(`[${FILE}] >>> STEP 1 FAIL: invalid signature — rejecting`);
-    return res.status(400).json({ error: 'Invalid signature' });
+    return res.status(400).json({ error: "Invalid signature" });
   }
 
   let event;
   try {
     event = JSON.parse(req.body.toString());
   } catch (err) {
-    return res.status(400).json({ error: 'Invalid JSON body' });
+    return res.status(400).json({ error: "Invalid JSON body" });
   }
 
-  log(2, 'Event received', { event: event.event });
+  log(2, "Event received", { event: event.event });
 
-  if (event.event !== 'payment.captured') {
-    return res.json({ received: true, action: 'ignored' });
+  if (event.event !== "payment.captured") {
+    return res.json({ received: true, action: "ignored" });
   }
 
-  const payment   = event.payload.payment.entity;
+  const payment = event.payload.payment.entity;
   const rpOrderId = payment.order_id;
-  const rpPayId   = payment.id;
+  const rpPayId = payment.id;
 
   // ── Respond to Razorpay immediately — then process async ────
   res.json({ received: true });
 
   try {
     // ── 1. Load order + customer ────────────────────────────────
-    log(5, 'Loading order from DB');
+    log(5, "Loading order from DB");
     const order = await dbGet(
       `SELECT o.*,
               c.full_name AS customer_full_name,
@@ -76,17 +75,19 @@ router.post('/', async (req, res) => {
     );
 
     if (!order) {
-      console.warn(`[${FILE}] >>> no order found for gateway_order_id="${rpOrderId}" — aborting`);
+      console.warn(
+        `[${FILE}] >>> no order found for gateway_order_id="${rpOrderId}" — aborting`
+      );
       return;
     }
 
-    if (order.status === 'paid') {
+    if (order.status === "paid") {
       console.log(`[${FILE}] >>> order ${order.id} already paid — skipped`);
       return;
     }
 
     // ── 2. Mark order as paid ───────────────────────────────────
-    log(6, 'Marking order as paid');
+    log(6, "Marking order as paid");
     await dbRun(
       `UPDATE orders
        SET status             = 'paid',
@@ -97,8 +98,8 @@ router.post('/', async (req, res) => {
       [
         rpPayId,
         JSON.stringify({
-          signature:      receivedSig,
-          webhook_event:  event.event,
+          signature: receivedSig,
+          webhook_event: event.event,
           payment_method: payment.method,
         }),
         order.id,
@@ -106,7 +107,7 @@ router.post('/', async (req, res) => {
     );
 
     // ── 3. Upgrade customer tier ────────────────────────────────
-    log(7, 'Upgrading customer tier');
+    log(7, "Upgrading customer tier");
     await dbRun(
       `UPDATE customers
        SET tier = 'paid_reading', updated_at = NOW()
@@ -116,26 +117,33 @@ router.post('/', async (req, res) => {
 
     // ── 4. Build numerology profile ─────────────────────────────
     const subjectName = order.subject_name || order.customer_full_name;
-    const rawDob      = order.subject_dob  || order.customer_dob;
-    const subjectDob  = rawDob instanceof Date
-      ? rawDob.toISOString().split('T')[0]
-      : String(rawDob);
+    const rawDob = order.subject_dob || order.customer_dob;
+    const subjectDob =
+      rawDob instanceof Date
+        ? rawDob.toISOString().split("T")[0]
+        : String(rawDob);
 
-    log(8, 'Building numerology profile');
-    const p = buildNumerologyProfile(subjectName, subjectDob);
+    log(8, "Building numerology profile");
+    const profile = buildNumerologyProfile(subjectName, subjectDob);
 
-    // Check for / create profile
-    let profileId;
+    // ── 5. Create or get profile record ─────────────────────────
+    log(9, "Checking for existing numerology profile");
     const existing = await dbGet(
       `SELECT id FROM numerology_profiles
        WHERE user_id = $1 AND is_primary = TRUE LIMIT 1`,
       [order.user_id]
     );
 
+    let profileId;
+
     if (existing) {
       profileId = existing.id;
+      log(9.1, "Using existing profile", { profileId });
     } else {
-      const result = await dbRun(
+      // ── Insert new numerology profile ────────────────────────
+      log(9.2, "Creating new numerology profile");
+      const p = profile;
+      const profileResult = await dbRun(
         `INSERT INTO numerology_profiles (
           user_id, name_used, dob_used, is_primary,
           psychic_number, psychic_compound,
@@ -192,119 +200,119 @@ router.post('/', async (req, res) => {
           3, NOW()
         ) RETURNING id`,
         [
-          order.user_id, subjectName, subjectDob,
-          p.psychic_number,        p.psychic_compound,
-          p.destiny_number,        p.destiny_compound,
-          p.name_number,           p.name_compound,
-          p.soul_urge_number,      p.soul_urge_compound,
-          p.personality_number,    p.personality_compound,
-          p.life_path_number,      p.life_path_compound,
-          p.maturity_number,       p.maturity_compound,
-          p.power_number,          p.power_compound,
-          p.birth_day_number,      p.birth_month_number,    p.birth_year_number,
-          p.personal_year_number,  p.personal_month_number, p.personal_day_number,
-          p.universal_year_number, p.universal_month_number,
-          p.ruling_planet,         p.pd_combination,
-          p.pinnacle_1,            p.pinnacle_1_start_age,  p.pinnacle_1_end_age,
-          p.pinnacle_2,            p.pinnacle_2_start_age,  p.pinnacle_2_end_age,
-          p.pinnacle_3,            p.pinnacle_3_start_age,  p.pinnacle_3_end_age,
-          p.pinnacle_4,            p.pinnacle_4_start_age,  p.current_pinnacle,
-          p.challenge_1, p.challenge_2, p.challenge_3, p.challenge_4, p.current_challenge,
-          p.life_period_1,      p.life_period_1_end_age,
-          p.life_period_2,      p.life_period_2_end_age,
-          p.life_period_3,      p.current_life_period,
-          p.cornerstone,        p.cornerstone_value,
-          p.capstone,           p.capstone_value,
-          p.first_vowel,        p.first_vowel_value,
+          order.user_id,
+          subjectName,
+          subjectDob,
+          p.psychic_number,
+          p.psychic_compound,
+          p.destiny_number,
+          p.destiny_compound,
+          p.name_number,
+          p.name_compound,
+          p.soul_urge_number,
+          p.soul_urge_compound,
+          p.personality_number,
+          p.personality_compound,
+          p.life_path_number,
+          p.life_path_compound,
+          p.maturity_number,
+          p.maturity_compound,
+          p.power_number,
+          p.power_compound,
+          p.birth_day_number,
+          p.birth_month_number,
+          p.birth_year_number,
+          p.personal_year_number,
+          p.personal_month_number,
+          p.personal_day_number,
+          p.universal_year_number,
+          p.universal_month_number,
+          p.ruling_planet,
+          p.pd_combination,
+          p.pinnacle_1,
+          p.pinnacle_1_start_age,
+          p.pinnacle_1_end_age,
+          p.pinnacle_2,
+          p.pinnacle_2_start_age,
+          p.pinnacle_2_end_age,
+          p.pinnacle_3,
+          p.pinnacle_3_start_age,
+          p.pinnacle_3_end_age,
+          p.pinnacle_4,
+          p.pinnacle_4_start_age,
+          p.current_pinnacle,
+          p.challenge_1,
+          p.challenge_2,
+          p.challenge_3,
+          p.challenge_4,
+          p.current_challenge,
+          p.life_period_1,
+          p.life_period_1_end_age,
+          p.life_period_2,
+          p.life_period_2_end_age,
+          p.life_period_3,
+          p.current_life_period,
+          p.cornerstone,
+          p.cornerstone_value,
+          p.capstone,
+          p.capstone_value,
+          p.first_vowel,
+          p.first_vowel_value,
           p.subconscious_self,
-          p.hidden_passions,    p.karmic_lessons,      p.missing_numbers,
-          p.has_karmic_debt,    p.karmic_debt_numbers, p.karmic_debt_locations,
-          p.has_master_11,      p.has_master_22,       p.has_master_33,
+          p.hidden_passions,
+          p.karmic_lessons,
+          p.missing_numbers,
+          p.has_karmic_debt,
+          p.karmic_debt_numbers,
+          p.karmic_debt_locations,
+          p.has_master_11,
+          p.has_master_22,
+          p.has_master_33,
           p.master_numbers_found,
-          p.plane_mental_count,     p.plane_physical_count,
-          p.plane_emotional_count,  p.plane_intuitive_count,
-          p.plane_mental_number,    p.plane_physical_number,
-          p.plane_emotional_number, p.plane_intuitive_number,
+          p.plane_mental_count,
+          p.plane_physical_count,
+          p.plane_emotional_count,
+          p.plane_intuitive_count,
+          p.plane_mental_number,
+          p.plane_physical_number,
+          p.plane_emotional_number,
+          p.plane_intuitive_number,
           p.dominant_plane,
-          p.soul_expression_bridge,  p.life_personality_bridge,
-          p.rational_thought_number, p.balance_number,
-          p.physical_transit,   p.physical_transit_value,
-          p.mental_transit,     p.mental_transit_value,
-          p.spiritual_transit,  p.spiritual_transit_value,
+          p.soul_expression_bridge,
+          p.life_personality_bridge,
+          p.rational_thought_number,
+          p.balance_number,
+          p.physical_transit,
+          p.physical_transit_value,
+          p.mental_transit,
+          p.mental_transit_value,
+          p.spiritual_transit,
+          p.spiritual_transit_value,
           p.essence_number,
         ]
       );
-      profileId = result.rows[0].id;
-    }
-    log(9, 'Profile ready', { profileId });
-
-    // ── 5. Pre-calculate report (optional — stored for admin use) ─
-    // Attach meta for AI prompts
-    p._meta = {
-      subject_name:   subjectName,
-      subject_gender: order.subject_gender || 'Prefer not to say',
-      is_self:        order.is_self,
-      customer_name:  order.customer_full_name,
-      product_slug:   order.product_slug,
-    };
-
-    log(10, 'Dispatching to engine');
-    const settings = require('../reading.settings');
-    const engineConfig = settings.defaultEngine;
-
-    let report      = null;
-    let engineUsed  = engineConfig;
-
-    try {
-      const result = await dispatcher.dispatch(order.product_slug, p);
-      report      = result;
-      // Read engine tags if dispatcher attached them
-      engineUsed  = result?._engine_used  || engineConfig;
-    } catch (err) {
-      console.error(`[${FILE}] >>> engine dispatch failed | message="${err.message}"`);
-      // report stays null — reading still inserted as pending
+      profileId = profileResult.rows[0].id;
+      log(9.2, "Profile created", { profileId });
     }
 
-    // ── 6. Insert reading record as PENDING ────────────────────
-    // status = 'pending' means: payment received, report NOT yet sent.
-    // Admin Fulfilment Queue shows all readings with this status.
-    // Admin changes to 'delivered' manually via mark-sent endpoint.
-    log(11, 'Saving reading record (status=pending)');
-    const readingResult = await dbRun(
-      `INSERT INTO readings
-         (user_id, profile_id, order_id,
-          product_slug, status,
-          report_content, engine_config, engine_used,
-          language, delivered_to, generated_at)
-       VALUES ($1,$2,$3,$4,'pending',$5,$6,$7,'en',$8,NOW())
-       RETURNING id`,
-      [
-        order.user_id,
-        profileId,
-        order.id,
-        order.product_slug,
-        report ? JSON.stringify(report) : null,
-        engineConfig,
-        engineUsed,
-        order.customer_email,
-      ]
-    );
-    const readingId = readingResult.rows[0].id;
+    // ── 6. Handle paid reading per MODE setting ─────────────────
+    log(10, "Calling handlePaidReading (respects PAID_REPORT_DELIVERY_MODE)");
+    const readingResult = await handlePaidReading(order, profile, profileId);
 
-    log(12, 'Reading saved — awaiting manual fulfilment', {
-      readingId,
-      orderId:     order.id,
-      productSlug: order.product_slug,
-      subjectName,
-      engineConfig,
-      engineUsed,
+    log(11, "Paid reading handling complete", {
+      mode: readingResult.mode,
+      readingId: readingResult.readingId,
+      status: readingResult.status,
+      message: readingResult.message,
     });
 
-    console.log(`[${FILE}] >>> Payment processed | orderId=${order.id} readingId=${readingId} status=pending | ${order.product_slug} | ${subjectName}`);
-    console.log(`[${FILE}] >>> ACTION REQUIRED: open admin Fulfilment Queue to send report`);
-
+    console.log(
+      `[${FILE}] >>> Payment processed successfully | orderId=${order.id} readingId=${readingResult.readingId} mode=${readingResult.mode}`
+    );
   } catch (err) {
-    console.error(`[${FILE}] >>> FATAL ERROR in async processing | message="${err.message}"`);
+    console.error(
+      `[${FILE}] >>> FATAL ERROR in async processing | message="${err.message}"`
+    );
     console.error(`[${FILE}] >>> STACK TRACE:`, err.stack);
   }
 });

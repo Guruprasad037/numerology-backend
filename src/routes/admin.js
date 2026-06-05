@@ -1,25 +1,23 @@
 // ============================================================
-//  src/routes/admin.js  v2
-//  Changes from v1:
-//    - Profiles query: removed birth_name_used (not in schema v3)
-//    - Profiles query: added all new v3 fields (master numbers,
-//      karmic debt, pinnacles, planes, transits, bridges etc)
-//    - Pending query: removed birth_name_used reference
-//    - Product slugs: full_reading added alongside legacy slugs
-//    - CSV export: updated field list, removed birth_name fields
+//  src/routes/admin.js
+//  v3 — Added DOCX download endpoint for MODE 2 reports
+//
+//  NEW ENDPOINTS:
+//    GET  /admin/readings/:id/report-docx    — download DOCX file
+//    POST /admin/readings/:id/mark-sent      — mark as delivered + save comments
 // ============================================================
 
-const express = require('express');
-const router  = express.Router();
-const { dbAll, dbGet, dbRun } = require('../config/db');
-const { requireAdmin }        = require('../middleware/auth');
+const express = require("express");
+const router = express.Router();
+const { dbAll, dbGet, dbRun } = require("../config/db");
+const { requireAdmin } = require("../middleware/auth");
 
 router.use(requireAdmin);
 
-// ─────────────────────────────────────────────
+// ────────────────────────────────────────────────────────────
 // DASHBOARD
-// ─────────────────────────────────────────────
-router.get('/dashboard', async (req, res) => {
+// ────────────────────────────────────────────────────────────
+router.get("/dashboard", async (req, res) => {
   try {
     const [customerStats, orderStats, readingStats, recentOrders, pendingReadings] =
       await Promise.all([
@@ -57,65 +55,66 @@ router.get('/dashboard', async (req, res) => {
         dbGet(
           `SELECT COUNT(*) AS count
            FROM readings
-           WHERE status = 'pending'
+           WHERE status IN ('pending', 'generated')
              AND order_id IS NOT NULL`
         ),
       ]);
 
-    const paid = orderStats.find(r => r.status === 'paid');
+    const paid = orderStats.find((r) => r.status === "paid");
 
     res.json({
-      customers:         customerStats,
-      orders:            orderStats,
-      readings:          readingStats,
-      recent_orders:     recentOrders,
-      pending_count:     parseInt(pendingReadings?.count || 0),
+      customers: customerStats,
+      orders: orderStats,
+      readings: readingStats,
+      recent_orders: recentOrders,
+      pending_count: parseInt(pendingReadings?.count || 0),
       total_revenue_inr: paid ? Math.round(parseInt(paid.total) / 100) : 0,
     });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: 'Failed to fetch dashboard.' });
+    res.status(500).json({ error: "Failed to fetch dashboard." });
   }
 });
 
-// ─────────────────────────────────────────────
+// ────────────────────────────────────────────────────────────
 // CUSTOMERS
-// ─────────────────────────────────────────────
-router.get('/customers', async (req, res) => {
+// ────────────────────────────────────────────────────────────
+router.get("/customers", async (req, res) => {
   try {
     const { tier } = req.query;
-    const rows = (tier && tier !== 'all')
-      ? await dbAll(
-          `SELECT id, full_name, dob, email, phone, gender, tier, locale,
-                  created_at, deleted_at
-           FROM customers
-           WHERE tier = $1 AND deleted_at IS NULL
-           ORDER BY created_at DESC`,
-          [tier]
-        )
-      : await dbAll(
-          `SELECT id, full_name, dob, email, phone, gender, tier, locale,
-                  created_at, deleted_at
-           FROM customers
-           WHERE deleted_at IS NULL
-           ORDER BY created_at DESC`
-        );
+    const rows =
+      tier && tier !== "all"
+        ? await dbAll(
+            `SELECT id, full_name, dob, email, phone, gender, tier, locale,
+                    created_at, deleted_at
+             FROM customers
+             WHERE tier = $1 AND deleted_at IS NULL
+             ORDER BY created_at DESC`,
+            [tier]
+          )
+        : await dbAll(
+            `SELECT id, full_name, dob, email, phone, gender, tier, locale,
+                    created_at, deleted_at
+             FROM customers
+             WHERE deleted_at IS NULL
+             ORDER BY created_at DESC`
+          );
     res.json({ count: rows.length, customers: rows });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: 'Failed to fetch customers.' });
+    res.status(500).json({ error: "Failed to fetch customers." });
   }
 });
 
-router.get('/users', async (req, res) => {
-  req.url = '/customers';
+router.get("/users", async (req, res) => {
+  req.url = "/customers";
   router.handle(req, res);
 });
 
-// ─────────────────────────────────────────────
-// NUMEROLOGY PROFILES  (Schema v3 — all fields)
-// ─────────────────────────────────────────────
-router.get('/profiles', async (req, res) => {
+// ────────────────────────────────────────────────────────────
+// NUMEROLOGY PROFILES
+// ────────────────────────────────────────────────────────────
+router.get("/profiles", async (req, res) => {
   try {
     const rows = await dbAll(
       `SELECT
@@ -126,8 +125,6 @@ router.get('/profiles', async (req, res) => {
         np.dob_used,
         np.is_primary,
         np.schema_version,
-
-        -- Core numbers
         np.psychic_number,       np.psychic_compound,
         np.destiny_number,       np.destiny_compound,
         np.name_number,          np.name_compound,
@@ -136,61 +133,37 @@ router.get('/profiles', async (req, res) => {
         np.maturity_number,      np.maturity_compound,
         np.power_number,         np.power_compound,
         np.life_path_number,     np.life_path_compound,
-
-        -- Planet / combo
         np.ruling_planet,        np.pd_combination,
-
-        -- Time cycles
         np.personal_year_number, np.personal_month_number,
         np.universal_year_number,
-
-        -- Pinnacles
         np.pinnacle_1, np.pinnacle_1_end_age,
         np.pinnacle_2, np.pinnacle_2_end_age,
         np.pinnacle_3, np.pinnacle_3_end_age,
         np.pinnacle_4,
         np.current_pinnacle,
-
-        -- Challenges
         np.challenge_1, np.challenge_2,
         np.challenge_3, np.challenge_4,
         np.current_challenge,
-
-        -- Name analysis
         np.cornerstone, np.capstone, np.first_vowel,
-
-        -- Hidden patterns
         np.subconscious_self,
         np.hidden_passions,
         np.karmic_lessons,
         np.missing_numbers,
-
-        -- Karmic debt
         np.has_karmic_debt,
         np.karmic_debt_numbers,
         np.karmic_debt_locations,
-
-        -- Master numbers
         np.has_master_11, np.has_master_22, np.has_master_33,
         np.master_numbers_found,
-
-        -- Planes
         np.dominant_plane,
         np.plane_mental_count, np.plane_physical_count,
         np.plane_emotional_count, np.plane_intuitive_count,
-
-        -- Bridges + derived
         np.soul_expression_bridge, np.life_personality_bridge,
         np.rational_thought_number, np.balance_number,
         np.essence_number,
-
-        -- Transits
         np.physical_transit,  np.physical_transit_value,
         np.mental_transit,    np.mental_transit_value,
         np.spiritual_transit, np.spiritual_transit_value,
-
         np.calculated_at
-
        FROM numerology_profiles np
        JOIN customers c ON c.id = np.user_id
        WHERE np.is_primary = TRUE
@@ -199,133 +172,86 @@ router.get('/profiles', async (req, res) => {
     res.json({ count: rows.length, profiles: rows });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: 'Failed to fetch profiles.' });
+    res.status(500).json({ error: "Failed to fetch profiles." });
   }
 });
 
-// ─────────────────────────────────────────────
+// ────────────────────────────────────────────────────────────
 // ORDERS
-// ─────────────────────────────────────────────
-router.get('/orders', async (req, res) => {
+// ────────────────────────────────────────────────────────────
+router.get("/orders", async (req, res) => {
   try {
     const { status } = req.query;
-    const rows = (status && status !== 'all')
-      ? await dbAll(
-          `SELECT o.*,
-                  c.full_name AS customer_full_name, c.email, c.phone
-           FROM orders o
-           JOIN customers c ON c.id = o.user_id
-           WHERE o.status = $1
-           ORDER BY o.created_at DESC`,
-          [status]
-        )
-      : await dbAll(
-          `SELECT o.*,
-                  c.full_name AS customer_full_name, c.email, c.phone
-           FROM orders o
-           JOIN customers c ON c.id = o.user_id
-           ORDER BY o.created_at DESC`
-        );
+    const rows =
+      status && status !== "all"
+        ? await dbAll(
+            `SELECT o.*,
+                    c.full_name AS customer_full_name, c.email, c.phone
+             FROM orders o
+             JOIN customers c ON c.id = o.user_id
+             WHERE o.status = $1
+             ORDER BY o.created_at DESC`,
+            [status]
+          )
+        : await dbAll(
+            `SELECT o.*,
+                    c.full_name AS customer_full_name, c.email, c.phone
+             FROM orders o
+             JOIN customers c ON c.id = o.user_id
+             ORDER BY o.created_at DESC`
+          );
     res.json({ count: rows.length, orders: rows });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: 'Failed to fetch orders.' });
+    res.status(500).json({ error: "Failed to fetch orders." });
   }
 });
 
-// ─────────────────────────────────────────────
+// ────────────────────────────────────────────────────────────
 // READINGS
-// ─────────────────────────────────────────────
-router.get('/readings', async (req, res) => {
+// ────────────────────────────────────────────────────────────
+router.get("/readings", async (req, res) => {
   try {
     const { status } = req.query;
-    const rows = (status && status !== 'all')
-      ? await dbAll(
-          `SELECT r.id, r.user_id, r.profile_id, r.order_id,
-                  c.full_name AS customer_full_name, c.email,
-                  o.customer_name, o.subject_name, o.subject_dob, o.is_self,
-                  r.product_slug, r.status, r.engine_config, r.engine_used,
-                  r.report_content, r.report_text,
-                  r.delivered_to, r.generated_at, r.delivered_at, r.created_at
-           FROM readings r
-           JOIN customers c ON c.id = r.user_id
-           LEFT JOIN orders o ON o.id = r.order_id
-           WHERE r.status = $1
-           ORDER BY r.created_at DESC`,
-          [status]
-        )
-      : await dbAll(
-          `SELECT r.id, r.user_id, r.profile_id, r.order_id,
-                  c.full_name AS customer_full_name, c.email,
-                  o.customer_name, o.subject_name, o.subject_dob, o.is_self,
-                  r.product_slug, r.status, r.engine_config, r.engine_used,
-                  r.report_content, r.report_text,
-                  r.delivered_to, r.generated_at, r.delivered_at, r.created_at
-           FROM readings r
-           JOIN customers c ON c.id = r.user_id
-           LEFT JOIN orders o ON o.id = r.order_id
-           ORDER BY r.created_at DESC`
-        );
+    const rows =
+      status && status !== "all"
+        ? await dbAll(
+            `SELECT r.id, r.user_id, r.profile_id, r.order_id,
+                    c.full_name AS customer_full_name, c.email,
+                    o.customer_name, o.subject_name, o.subject_dob, o.is_self,
+                    r.product_slug, r.status, r.engine_config, r.engine_used,
+                    r.report_content, r.report_text,
+                    r.delivered_to, r.generated_at, r.delivered_at, r.created_at
+             FROM readings r
+             JOIN customers c ON c.id = r.user_id
+             LEFT JOIN orders o ON o.id = r.order_id
+             WHERE r.status = $1
+             ORDER BY r.created_at DESC`,
+            [status]
+          )
+        : await dbAll(
+            `SELECT r.id, r.user_id, r.profile_id, r.order_id,
+                    c.full_name AS customer_full_name, c.email,
+                    o.customer_name, o.subject_name, o.subject_dob, o.is_self,
+                    r.product_slug, r.status, r.engine_config, r.engine_used,
+                    r.report_content, r.report_text,
+                    r.delivered_to, r.generated_at, r.delivered_at, r.created_at
+             FROM readings r
+             JOIN customers c ON c.id = r.user_id
+             LEFT JOIN orders o ON o.id = r.order_id
+             ORDER BY r.created_at DESC`
+          );
     res.json({ count: rows.length, readings: rows });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: 'Failed to fetch readings.' });
+    res.status(500).json({ error: "Failed to fetch readings." });
   }
 });
 
-// ─────────────────────────────────────────────
-// PENDING READINGS  (manual fulfilment queue)
-// ─────────────────────────────────────────────
-router.get('/pending', async (req, res) => {
-  try {
-    const rows = await dbAll(
-      `SELECT
-        r.id              AS reading_id,
-        r.product_slug,
-        r.created_at      AS reading_created_at,
-        c.full_name       AS customer_full_name,
-        c.email, c.phone,
-        o.customer_name,
-        o.subject_name, o.subject_dob, o.subject_gender, o.is_self,
-        o.final_amount, o.currency, o.paid_at,
-        np.name_used,
-        np.dob_used,
-        np.psychic_number,      np.psychic_compound,
-        np.destiny_number,      np.destiny_compound,
-        np.personal_year_number,
-        np.ruling_planet,
-        np.name_number,         np.name_compound,
-        np.soul_urge_number,    np.soul_urge_compound,
-        np.personality_number,  np.personality_compound,
-        np.maturity_number,     np.power_number,
-        np.missing_numbers,     np.pd_combination,
-        np.has_karmic_debt,     np.karmic_debt_numbers,
-        np.has_master_11,       np.has_master_22, np.has_master_33,
-        np.current_pinnacle,    np.current_challenge,
-        np.essence_number,      np.dominant_plane
-       FROM readings r
-       JOIN customers c  ON c.id  = r.user_id
-       LEFT JOIN orders o         ON o.id  = r.order_id
-       LEFT JOIN numerology_profiles np ON np.id = r.profile_id
-       WHERE r.status = 'pending'
-         AND r.order_id IS NOT NULL
-       ORDER BY r.created_at ASC`
-    );
-    res.json({ count: rows.length, pending: rows });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Failed to fetch pending readings.' });
-  }
-});
-
-// ─────────────────────────────────────────────
-// MARK READING AS DELIVERED
-// ─────────────────────────────────────────────
-// ─────────────────────────────────────────────
-// PENDING PAID READINGS  (fulfilment queue)
-// Returns only paid orders where report has not yet been sent
-// ─────────────────────────────────────────────
-router.get('/pending-paid', async (req, res) => {
+// ────────────────────────────────────────────────────────────
+// PENDING PAID READINGS (Fulfilment Queue)
+// ────────────────────────────────────────────────────────────
+router.get("/pending-paid", async (req, res) => {
   try {
     const rows = await dbAll(
       `SELECT
@@ -373,20 +299,77 @@ router.get('/pending-paid', async (req, res) => {
     res.json({ count: rows.length, pending: rows });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: 'Failed to fetch pending paid readings.' });
+    res.status(500).json({ error: "Failed to fetch pending paid readings." });
   }
 });
 
-// ─────────────────────────────────────────────
-// MARK READING AS SENT
-// Called when you have manually sent the PDF to the customer
-// Body: { sent_to (email), sent_by, admin_notes }
-// ─────────────────────────────────────────────
-router.post('/readings/:id/mark-sent', async (req, res) => {
+// ────────────────────────────────────────────────────────────
+// DOWNLOAD DOCX REPORT
+// New endpoint — returns the generated DOCX file
+// ────────────────────────────────────────────────────────────
+router.get("/readings/:id/report-docx", async (req, res) => {
   try {
-    const { sent_to, sent_by = 'admin', admin_notes = '' } = req.body;
-    if (!sent_to)
-      return res.status(400).json({ error: 'sent_to (email) is required.' });
+    const reading = await dbGet(
+      `SELECT id, report_content, status FROM readings WHERE id = $1`,
+      [req.params.id]
+    );
+
+    if (!reading) {
+      return res.status(404).json({ error: "Reading not found." });
+    }
+
+    // Parse report_content to get DOCX base64
+    let reportContent;
+    try {
+      reportContent = JSON.parse(reading.report_content || "{}");
+    } catch (e) {
+      return res.status(400).json({ error: "Invalid report format." });
+    }
+
+    // Check if DOCX exists
+    if (!reportContent.docx_base64) {
+      return res.status(400).json({
+        error:
+          "No DOCX report available. (MODE 1: Manual generation, or report generation failed)",
+      });
+    }
+
+    // Convert base64 → Buffer
+    const docxBuffer = Buffer.from(reportContent.docx_base64, "base64");
+
+    // Generate filename with timestamp
+    const fileName = reportContent.docx_filename || "report.docx";
+
+    // Send file
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    );
+    res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
+    res.setHeader("Content-Length", docxBuffer.length);
+
+    console.log(
+      `[admin.js] >>> Sending DOCX download | readingId=${req.params.id} | fileName="${fileName}" | size=${docxBuffer.length}`
+    );
+
+    res.send(docxBuffer);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to download report." });
+  }
+});
+
+// ────────────────────────────────────────────────────────────
+// MARK READING AS SENT
+// Updates status to delivered + saves admin notes
+// ────────────────────────────────────────────────────────────
+router.post("/readings/:id/mark-sent", async (req, res) => {
+  try {
+    const { sent_to, sent_by = "admin", admin_notes = "" } = req.body;
+
+    if (!sent_to) {
+      return res.status(400).json({ error: "sent_to (email) is required." });
+    }
 
     await dbRun(
       `UPDATE readings
@@ -401,7 +384,7 @@ router.post('/readings/:id/mark-sent', async (req, res) => {
       [sent_to, sent_by, admin_notes, req.params.id]
     );
 
-    // Upgrade customer tier to paid_reading
+    // Upgrade customer tier if still free_reading
     await dbRun(
       `UPDATE customers
        SET tier       = 'paid_reading',
@@ -411,35 +394,41 @@ router.post('/readings/:id/mark-sent', async (req, res) => {
       [req.params.id]
     );
 
-    res.json({ success: true });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Failed to mark reading as sent.' });
-  }
-});
-
-// ─────────────────────────────────────────────
-// SAVE ADMIN NOTES (without marking sent)
-// Useful for adding notes while working on the report
-// ─────────────────────────────────────────────
-router.post('/readings/:id/notes', async (req, res) => {
-  try {
-    const { admin_notes = '' } = req.body;
-    await dbRun(
-      `UPDATE readings SET admin_notes = $1 WHERE id = $2`,
-      [admin_notes, req.params.id]
+    console.log(
+      `[admin.js] >>> Reading marked as delivered | readingId=${req.params.id}`
     );
+
     res.json({ success: true });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: 'Failed to save notes.' });
+    res.status(500).json({ error: "Failed to mark reading as sent." });
   }
 });
 
-// ─────────────────────────────────────────────
+// ────────────────────────────────────────────────────────────
+// SAVE ADMIN NOTES (without marking sent)
+// ────────────────────────────────────────────────────────────
+router.post("/readings/:id/notes", async (req, res) => {
+  try {
+    const { admin_notes = "" } = req.body;
+    await dbRun(`UPDATE readings SET admin_notes = $1 WHERE id = $2`, [
+      admin_notes,
+      req.params.id,
+    ]);
+
+    console.log(`[admin.js] >>> Admin notes saved | readingId=${req.params.id}`);
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to save notes." });
+  }
+});
+
+// ────────────────────────────────────────────────────────────
 // CSV EXPORT
-// ─────────────────────────────────────────────
-router.get('/leads/export', async (req, res) => {
+// ────────────────────────────────────────────────────────────
+router.get("/leads/export", async (req, res) => {
   try {
     const rows = await dbAll(
       `SELECT
@@ -467,59 +456,89 @@ router.get('/leads/export', async (req, res) => {
     );
 
     const header = [
-      'ID','Created At','Name','Email','Phone','DOB','Gender','Tier',
-      'Psychic','Psychic Compound','Destiny','Destiny Compound',
-      'Name Number','Name Compound','Soul Urge','Personality',
-      'Maturity','Power','Personal Year','Ruling Planet','PD Combo',
-      'Karmic Debt?','Karmic Debt Numbers',
-      'Master 11?','Master 22?','Master 33?',
-      'Current Pinnacle','Current Challenge','Dominant Plane',
-      'Missing Numbers','Essence Number',
-    ].join(',');
+      "ID",
+      "Created At",
+      "Name",
+      "Email",
+      "Phone",
+      "DOB",
+      "Gender",
+      "Tier",
+      "Psychic",
+      "Psychic Compound",
+      "Destiny",
+      "Destiny Compound",
+      "Name Number",
+      "Name Compound",
+      "Soul Urge",
+      "Personality",
+      "Maturity",
+      "Power",
+      "Personal Year",
+      "Ruling Planet",
+      "PD Combo",
+      "Karmic Debt?",
+      "Karmic Debt Numbers",
+      "Master 11?",
+      "Master 22?",
+      "Master 33?",
+      "Current Pinnacle",
+      "Current Challenge",
+      "Dominant Plane",
+      "Missing Numbers",
+      "Essence Number",
+    ].join(",");
 
     const csv = [
       header,
-      ...rows.map(r => [
+      ...rows.map((r) => [
         r.id,
         r.created_at,
-        `"${(r.full_name || '').replace(/"/g,'""')}"`,
-        r.email        || '',
-        r.phone        || '',
-        r.dob          || '',
-        r.gender       || '',
+        `"${(r.full_name || "").replace(/"/g, '""')}"`,
+        r.email || "",
+        r.phone || "",
+        r.dob || "",
+        r.gender || "",
         r.tier,
-        r.psychic_number       ?? '',
-        r.psychic_compound     ?? '',
-        r.destiny_number       ?? '',
-        r.destiny_compound     ?? '',
-        r.name_number          ?? '',
-        r.name_compound        ?? '',
-        r.soul_urge_number     ?? '',
-        r.personality_number   ?? '',
-        r.maturity_number      ?? '',
-        r.power_number         ?? '',
-        r.personal_year_number ?? '',
-        r.ruling_planet        || '',
-        r.pd_combination       || '',
-        r.has_karmic_debt      ?? '',
-        Array.isArray(r.karmic_debt_numbers) ? `"${r.karmic_debt_numbers.join(',')}"` : '',
-        r.has_master_11        ?? '',
-        r.has_master_22        ?? '',
-        r.has_master_33        ?? '',
-        r.current_pinnacle     ?? '',
-        r.current_challenge    ?? '',
-        r.dominant_plane       || '',
-        Array.isArray(r.missing_numbers) ? `"${r.missing_numbers.join(',')}"` : '',
-        r.essence_number       ?? '',
-      ].join(',')),
-    ].join('\n');
+        r.psychic_number ?? "",
+        r.psychic_compound ?? "",
+        r.destiny_number ?? "",
+        r.destiny_compound ?? "",
+        r.name_number ?? "",
+        r.name_compound ?? "",
+        r.soul_urge_number ?? "",
+        r.personality_number ?? "",
+        r.maturity_number ?? "",
+        r.power_number ?? "",
+        r.personal_year_number ?? "",
+        r.ruling_planet || "",
+        r.pd_combination || "",
+        r.has_karmic_debt ?? "",
+        Array.isArray(r.karmic_debt_numbers)
+          ? `"${r.karmic_debt_numbers.join(",")}"`
+          : "",
+        r.has_master_11 ?? "",
+        r.has_master_22 ?? "",
+        r.has_master_33 ?? "",
+        r.current_pinnacle ?? "",
+        r.current_challenge ?? "",
+        r.dominant_plane || "",
+        Array.isArray(r.missing_numbers)
+          ? `"${r.missing_numbers.join(",")}"`
+          : "",
+        r.essence_number ?? "",
+      ].join(",")),
+    ].join("\n");
 
-    res.setHeader('Content-Type', 'text/csv');
-    res.setHeader('Content-Disposition', 'attachment; filename="knowselfnow-leads.csv"');
+    res.setHeader("Content-Type", "text/csv");
+    res.setHeader(
+      "Content-Disposition",
+      'attachment; filename="knowselfnow-leads.csv"'
+    );
     res.send(csv);
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: 'Failed to export leads.' });
+    res.status(500).json({ error: "Failed to export leads." });
   }
 });
 

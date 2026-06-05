@@ -27,7 +27,7 @@ async function run(prompt) {
   });
 
   log(2, "Sending request to Claude API", {
-    model: "claude-sonnet-4-20250514",
+    model: "claude-sonnet-4-6",
     promptLength: prompt?.length,
     promptPreview: prompt?.slice(0, 300),
   });

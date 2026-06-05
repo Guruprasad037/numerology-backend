@@ -1,22 +1,12 @@
 // ============================================================
-//  src/routes/admin.js
-//  Admin API routes (all protected by requireAdmin middleware)
-//
-//  Endpoints:
-//    GET  /admin/dashboard             — summary stats
-//    GET  /admin/customers             — all customers
-//    GET  /admin/profiles              — all numerology profiles
-//    GET  /admin/orders                — all orders (filter by ?status=)
-//    GET  /admin/readings              — all readings (filter by ?status=)
-//    GET  /admin/pending               — readings pending delivery
-//    POST /admin/readings/:id/deliver  — mark reading as delivered
-//    GET  /admin/leads/export          — CSV export of free customers
-//
-//  Schema: Chaldean numerology_profiles (schema_version = 2)
-//  Columns used: psychic_number, destiny_number, name_number,
-//                soul_urge_number, personality_number, maturity_number,
-//                power_number, personal_year_number, ruling_planet,
-//                pd_combination, missing_numbers
+//  src/routes/admin.js  v2
+//  Changes from v1:
+//    - Profiles query: removed birth_name_used (not in schema v3)
+//    - Profiles query: added all new v3 fields (master numbers,
+//      karmic debt, pinnacles, planes, transits, bridges etc)
+//    - Pending query: removed birth_name_used reference
+//    - Product slugs: full_reading added alongside legacy slugs
+//    - CSV export: updated field list, removed birth_name fields
 // ============================================================
 
 const express = require('express');
@@ -26,24 +16,19 @@ const { requireAdmin }        = require('../middleware/auth');
 
 router.use(requireAdmin);
 
-
 // ─────────────────────────────────────────────
 // DASHBOARD
 // ─────────────────────────────────────────────
-
 router.get('/dashboard', async (req, res) => {
   try {
     const [customerStats, orderStats, readingStats, recentOrders, pendingReadings] =
       await Promise.all([
-        // Customer counts by tier
         dbAll(
           `SELECT tier, COUNT(*) AS count
            FROM customers
            WHERE deleted_at IS NULL
            GROUP BY tier`
         ),
-
-        // Order totals by status
         dbAll(
           `SELECT status,
                   COUNT(*) AS count,
@@ -51,15 +36,11 @@ router.get('/dashboard', async (req, res) => {
            FROM orders
            GROUP BY status`
         ),
-
-        // Reading counts by status
         dbAll(
           `SELECT status, COUNT(*) AS count
            FROM readings
            GROUP BY status`
         ),
-
-        // 5 most recent paid orders — customer info + subject info
         dbAll(
           `SELECT o.id,
                   c.full_name AS customer_full_name, c.email,
@@ -73,8 +54,6 @@ router.get('/dashboard', async (req, res) => {
            ORDER BY o.created_at DESC
            LIMIT 5`
         ),
-
-        // Count of undelivered paid readings
         dbGet(
           `SELECT COUNT(*) AS count
            FROM readings
@@ -99,15 +78,12 @@ router.get('/dashboard', async (req, res) => {
   }
 });
 
-
 // ─────────────────────────────────────────────
 // CUSTOMERS
 // ─────────────────────────────────────────────
-
 router.get('/customers', async (req, res) => {
   try {
     const { tier } = req.query;
-
     const rows = (tier && tier !== 'all')
       ? await dbAll(
           `SELECT id, full_name, dob, email, phone, gender, tier, locale,
@@ -124,7 +100,6 @@ router.get('/customers', async (req, res) => {
            WHERE deleted_at IS NULL
            ORDER BY created_at DESC`
         );
-
     res.json({ count: rows.length, customers: rows });
   } catch (err) {
     console.error(err);
@@ -132,64 +107,95 @@ router.get('/customers', async (req, res) => {
   }
 });
 
-// Alias — keeps any existing integrations working
 router.get('/users', async (req, res) => {
   req.url = '/customers';
   router.handle(req, res);
 });
 
-
 // ─────────────────────────────────────────────
-// NUMEROLOGY PROFILES  (Chaldean schema v2)
+// NUMEROLOGY PROFILES  (Schema v3 — all fields)
 // ─────────────────────────────────────────────
-
 router.get('/profiles', async (req, res) => {
   try {
     const rows = await dbAll(
-      `SELECT np.id,
-              np.user_id,
-              c.full_name,
-              np.name_used,
-              np.birth_name_used,
-              np.dob_used,
-              np.is_primary,
+      `SELECT
+        np.id,
+        np.user_id,
+        c.full_name,
+        np.name_used,
+        np.dob_used,
+        np.is_primary,
+        np.schema_version,
 
-              -- DOB-based
-              np.psychic_number,
-              np.psychic_compound,
-              np.destiny_number,
-              np.destiny_compound,
-              np.personal_year_number,
-              np.ruling_planet,
+        -- Core numbers
+        np.psychic_number,       np.psychic_compound,
+        np.destiny_number,       np.destiny_compound,
+        np.name_number,          np.name_compound,
+        np.soul_urge_number,     np.soul_urge_compound,
+        np.personality_number,   np.personality_compound,
+        np.maturity_number,      np.maturity_compound,
+        np.power_number,         np.power_compound,
+        np.life_path_number,     np.life_path_compound,
 
-              -- Name-based
-              np.name_number,
-              np.name_compound,
-              np.soul_urge_number,
-              np.soul_urge_compound,
-              np.personality_number,
-              np.personality_compound,
+        -- Planet / combo
+        np.ruling_planet,        np.pd_combination,
 
-              -- Birth name (optional)
-              np.birth_name_number,
-              np.birth_name_compound,
+        -- Time cycles
+        np.personal_year_number, np.personal_month_number,
+        np.universal_year_number,
 
-              -- Derived
-              np.maturity_number,
-              np.power_number,
+        -- Pinnacles
+        np.pinnacle_1, np.pinnacle_1_end_age,
+        np.pinnacle_2, np.pinnacle_2_end_age,
+        np.pinnacle_3, np.pinnacle_3_end_age,
+        np.pinnacle_4,
+        np.current_pinnacle,
 
-              -- Chaldean-specific
-              np.missing_numbers,
-              np.pd_combination,
+        -- Challenges
+        np.challenge_1, np.challenge_2,
+        np.challenge_3, np.challenge_4,
+        np.current_challenge,
 
-              np.schema_version,
-              np.calculated_at
+        -- Name analysis
+        np.cornerstone, np.capstone, np.first_vowel,
+
+        -- Hidden patterns
+        np.subconscious_self,
+        np.hidden_passions,
+        np.karmic_lessons,
+        np.missing_numbers,
+
+        -- Karmic debt
+        np.has_karmic_debt,
+        np.karmic_debt_numbers,
+        np.karmic_debt_locations,
+
+        -- Master numbers
+        np.has_master_11, np.has_master_22, np.has_master_33,
+        np.master_numbers_found,
+
+        -- Planes
+        np.dominant_plane,
+        np.plane_mental_count, np.plane_physical_count,
+        np.plane_emotional_count, np.plane_intuitive_count,
+
+        -- Bridges + derived
+        np.soul_expression_bridge, np.life_personality_bridge,
+        np.rational_thought_number, np.balance_number,
+        np.essence_number,
+
+        -- Transits
+        np.physical_transit,  np.physical_transit_value,
+        np.mental_transit,    np.mental_transit_value,
+        np.spiritual_transit, np.spiritual_transit_value,
+
+        np.calculated_at
+
        FROM numerology_profiles np
        JOIN customers c ON c.id = np.user_id
        WHERE np.is_primary = TRUE
        ORDER BY np.calculated_at DESC`
     );
-
     res.json({ count: rows.length, profiles: rows });
   } catch (err) {
     console.error(err);
@@ -197,15 +203,12 @@ router.get('/profiles', async (req, res) => {
   }
 });
 
-
 // ─────────────────────────────────────────────
 // ORDERS
 // ─────────────────────────────────────────────
-
 router.get('/orders', async (req, res) => {
   try {
     const { status } = req.query;
-
     const rows = (status && status !== 'all')
       ? await dbAll(
           `SELECT o.*,
@@ -223,7 +226,6 @@ router.get('/orders', async (req, res) => {
            JOIN customers c ON c.id = o.user_id
            ORDER BY o.created_at DESC`
         );
-
     res.json({ count: rows.length, orders: rows });
   } catch (err) {
     console.error(err);
@@ -231,33 +233,20 @@ router.get('/orders', async (req, res) => {
   }
 });
 
-
 // ─────────────────────────────────────────────
 // READINGS
 // ─────────────────────────────────────────────
-
 router.get('/readings', async (req, res) => {
   try {
     const { status } = req.query;
-
     const rows = (status && status !== 'all')
       ? await dbAll(
-          `SELECT r.id,
-                  r.user_id,
-                  c.full_name AS customer_full_name,
-                  c.email,
-                  o.customer_name,
-                  o.subject_name,
-                  o.subject_dob,
-                  o.is_self,
-                  r.product_slug,
-                  r.status,
-                  r.engine_used,
-                  r.delivered_to,
-                  r.generated_at,
-                  r.delivered_at,
-                  r.created_at,
-                  r.order_id
+          `SELECT r.id, r.user_id, r.profile_id, r.order_id,
+                  c.full_name AS customer_full_name, c.email,
+                  o.customer_name, o.subject_name, o.subject_dob, o.is_self,
+                  r.product_slug, r.status, r.engine_used,
+                  r.report_content, r.report_text,
+                  r.delivered_to, r.generated_at, r.delivered_at, r.created_at
            FROM readings r
            JOIN customers c ON c.id = r.user_id
            LEFT JOIN orders o ON o.id = r.order_id
@@ -266,28 +255,17 @@ router.get('/readings', async (req, res) => {
           [status]
         )
       : await dbAll(
-          `SELECT r.id,
-                  r.user_id,
-                  c.full_name AS customer_full_name,
-                  c.email,
-                  o.customer_name,
-                  o.subject_name,
-                  o.subject_dob,
-                  o.is_self,
-                  r.product_slug,
-                  r.status,
-                  r.engine_used,
-                  r.delivered_to,
-                  r.generated_at,
-                  r.delivered_at,
-                  r.created_at,
-                  r.order_id
+          `SELECT r.id, r.user_id, r.profile_id, r.order_id,
+                  c.full_name AS customer_full_name, c.email,
+                  o.customer_name, o.subject_name, o.subject_dob, o.is_self,
+                  r.product_slug, r.status, r.engine_used,
+                  r.report_content, r.report_text,
+                  r.delivered_to, r.generated_at, r.delivered_at, r.created_at
            FROM readings r
            JOIN customers c ON c.id = r.user_id
            LEFT JOIN orders o ON o.id = r.order_id
            ORDER BY r.created_at DESC`
         );
-
     res.json({ count: rows.length, readings: rows });
   } catch (err) {
     console.error(err);
@@ -295,67 +273,36 @@ router.get('/readings', async (req, res) => {
   }
 });
 
-
 // ─────────────────────────────────────────────
-// PENDING READINGS  (your manual fulfilment queue)
-// Paid orders where report hasn't been delivered yet.
-// Shows all the Chaldean numbers you need to write the report.
+// PENDING READINGS  (manual fulfilment queue)
 // ─────────────────────────────────────────────
-
 router.get('/pending', async (req, res) => {
   try {
     const rows = await dbAll(
       `SELECT
-              -- Reading & order identifiers
-              r.id              AS reading_id,
-              r.product_slug,
-              r.created_at      AS reading_created_at,
-
-              -- Customer (the person who paid)
-              c.full_name       AS customer_full_name,
-              c.email,
-              c.phone,
-              o.customer_name,
-
-              -- Subject (whose numbers are being read)
-              o.subject_name,
-              o.subject_dob,
-              o.subject_gender,
-              o.is_self,
-
-              -- Payment
-              o.final_amount,
-              o.currency,
-              o.paid_at,
-
-              -- Chaldean profile (for writing the report)
-              np.name_used,
-              np.birth_name_used,
-              np.dob_used,
-
-              np.psychic_number,
-              np.psychic_compound,
-              np.destiny_number,
-              np.destiny_compound,
-              np.personal_year_number,
-              np.ruling_planet,
-
-              np.name_number,
-              np.name_compound,
-              np.soul_urge_number,
-              np.soul_urge_compound,
-              np.personality_number,
-              np.personality_compound,
-
-              np.birth_name_number,
-              np.birth_name_compound,
-
-              np.maturity_number,
-              np.power_number,
-
-              np.missing_numbers,
-              np.pd_combination
-
+        r.id              AS reading_id,
+        r.product_slug,
+        r.created_at      AS reading_created_at,
+        c.full_name       AS customer_full_name,
+        c.email, c.phone,
+        o.customer_name,
+        o.subject_name, o.subject_dob, o.subject_gender, o.is_self,
+        o.final_amount, o.currency, o.paid_at,
+        np.name_used,
+        np.dob_used,
+        np.psychic_number,      np.psychic_compound,
+        np.destiny_number,      np.destiny_compound,
+        np.personal_year_number,
+        np.ruling_planet,
+        np.name_number,         np.name_compound,
+        np.soul_urge_number,    np.soul_urge_compound,
+        np.personality_number,  np.personality_compound,
+        np.maturity_number,     np.power_number,
+        np.missing_numbers,     np.pd_combination,
+        np.has_karmic_debt,     np.karmic_debt_numbers,
+        np.has_master_11,       np.has_master_22, np.has_master_33,
+        np.current_pinnacle,    np.current_challenge,
+        np.essence_number,      np.dominant_plane
        FROM readings r
        JOIN customers c  ON c.id  = r.user_id
        LEFT JOIN orders o         ON o.id  = r.order_id
@@ -364,7 +311,6 @@ router.get('/pending', async (req, res) => {
          AND r.order_id IS NOT NULL
        ORDER BY r.created_at ASC`
     );
-
     res.json({ count: rows.length, pending: rows });
   } catch (err) {
     console.error(err);
@@ -372,15 +318,12 @@ router.get('/pending', async (req, res) => {
   }
 });
 
-
 // ─────────────────────────────────────────────
 // MARK READING AS DELIVERED
 // ─────────────────────────────────────────────
-
 router.post('/readings/:id/deliver', async (req, res) => {
   try {
     const { delivered_to, report_text = '' } = req.body;
-
     if (!delivered_to)
       return res.status(400).json({ error: 'delivered_to (email) is required.' });
 
@@ -395,7 +338,6 @@ router.post('/readings/:id/deliver', async (req, res) => {
       [delivered_to, report_text, req.params.id]
     );
 
-    // Upgrade customer tier if still on free
     await dbRun(
       `UPDATE customers
        SET tier       = 'paid_reading',
@@ -412,37 +354,29 @@ router.post('/readings/:id/deliver', async (req, res) => {
   }
 });
 
-
 // ─────────────────────────────────────────────
-// CSV EXPORT — all customers / leads
+// CSV EXPORT
 // ─────────────────────────────────────────────
-
 router.get('/leads/export', async (req, res) => {
   try {
     const rows = await dbAll(
       `SELECT
-              c.id,
-              c.created_at,
-              c.full_name,
-              c.email,
-              c.phone,
-              c.dob,
-              c.gender,
-              c.tier,
-
-              -- Chaldean profile numbers
-              np.psychic_number,
-              np.destiny_number,
-              np.name_number,
-              np.soul_urge_number,
-              np.personality_number,
-              np.maturity_number,
-              np.power_number,
-              np.personal_year_number,
-              np.ruling_planet,
-              np.pd_combination,
-              np.missing_numbers
-
+        c.id, c.created_at, c.full_name, c.email, c.phone,
+        c.dob, c.gender, c.tier,
+        np.psychic_number,       np.psychic_compound,
+        np.destiny_number,       np.destiny_compound,
+        np.name_number,          np.name_compound,
+        np.soul_urge_number,
+        np.personality_number,
+        np.maturity_number,
+        np.power_number,
+        np.personal_year_number,
+        np.ruling_planet,        np.pd_combination,
+        np.has_karmic_debt,      np.karmic_debt_numbers,
+        np.has_master_11,        np.has_master_22, np.has_master_33,
+        np.current_pinnacle,     np.current_challenge,
+        np.dominant_plane,
+        np.missing_numbers,      np.essence_number
        FROM customers c
        LEFT JOIN numerology_profiles np
          ON np.user_id = c.id AND np.is_primary = TRUE
@@ -451,10 +385,14 @@ router.get('/leads/export', async (req, res) => {
     );
 
     const header = [
-      'ID', 'Created At', 'Name', 'Email', 'Phone', 'DOB', 'Gender', 'Tier',
-      'Psychic Number', 'Destiny Number', 'Name Number',
-      'Soul Urge', 'Personality', 'Maturity', 'Power Number',
-      'Personal Year', 'Ruling Planet', 'PD Combination', 'Missing Numbers',
+      'ID','Created At','Name','Email','Phone','DOB','Gender','Tier',
+      'Psychic','Psychic Compound','Destiny','Destiny Compound',
+      'Name Number','Name Compound','Soul Urge','Personality',
+      'Maturity','Power','Personal Year','Ruling Planet','PD Combo',
+      'Karmic Debt?','Karmic Debt Numbers',
+      'Master 11?','Master 22?','Master 33?',
+      'Current Pinnacle','Current Challenge','Dominant Plane',
+      'Missing Numbers','Essence Number',
     ].join(',');
 
     const csv = [
@@ -462,26 +400,35 @@ router.get('/leads/export', async (req, res) => {
       ...rows.map(r => [
         r.id,
         r.created_at,
-        `"${(r.full_name || '').replace(/"/g, '""')}"`,
+        `"${(r.full_name || '').replace(/"/g,'""')}"`,
         r.email        || '',
         r.phone        || '',
         r.dob          || '',
         r.gender       || '',
         r.tier,
-        r.psychic_number       || '',
-        r.destiny_number       || '',
-        r.name_number          || '',
-        r.soul_urge_number     || '',
-        r.personality_number   || '',
-        r.maturity_number      || '',
-        r.power_number         || '',
-        r.personal_year_number || '',
+        r.psychic_number       ?? '',
+        r.psychic_compound     ?? '',
+        r.destiny_number       ?? '',
+        r.destiny_compound     ?? '',
+        r.name_number          ?? '',
+        r.name_compound        ?? '',
+        r.soul_urge_number     ?? '',
+        r.personality_number   ?? '',
+        r.maturity_number      ?? '',
+        r.power_number         ?? '',
+        r.personal_year_number ?? '',
         r.ruling_planet        || '',
         r.pd_combination       || '',
-        // missing_numbers is a Postgres array — convert to readable string
-        Array.isArray(r.missing_numbers)
-          ? `"${r.missing_numbers.join(', ')}"`
-          : (r.missing_numbers || ''),
+        r.has_karmic_debt      ?? '',
+        Array.isArray(r.karmic_debt_numbers) ? `"${r.karmic_debt_numbers.join(',')}"` : '',
+        r.has_master_11        ?? '',
+        r.has_master_22        ?? '',
+        r.has_master_33        ?? '',
+        r.current_pinnacle     ?? '',
+        r.current_challenge    ?? '',
+        r.dominant_plane       || '',
+        Array.isArray(r.missing_numbers) ? `"${r.missing_numbers.join(',')}"` : '',
+        r.essence_number       ?? '',
       ].join(',')),
     ].join('\n');
 
@@ -493,6 +440,5 @@ router.get('/leads/export', async (req, res) => {
     res.status(500).json({ error: 'Failed to export leads.' });
   }
 });
-
 
 module.exports = router;

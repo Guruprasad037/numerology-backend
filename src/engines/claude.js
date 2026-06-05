@@ -23,7 +23,7 @@ async function run(prompt) {
 
   log(1.1, "environment check", {
     hasApiKey: !!process.env.ANTHROPIC_API_KEY,
-    model: "claude-sonnet-4-20250514",
+    model: "claude-sonnet-4-6",
   });
 
   log(2, "Sending request to Claude API", {

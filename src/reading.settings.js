@@ -28,7 +28,7 @@ log(1, "Module loaded");
 
 // ---------------- CONFIG ----------------
 const config = {
-  defaultEngine: "hardcoded",
+  defaultEngine: "claude",
   fallbackEngine: "hardcoded",
   engineOverrides: {
     // free_reading: 'claude',

@@ -325,19 +325,25 @@ router.get("/readings/:id/report-html", async (req, res) => {
       return res.status(400).json({ error: "Invalid report format." });
     }
 
-    if (!reportContent.html) {
-      return res.status(400).json({ error: "No HTML report available for this reading." });
+    // Support both new format (html field) and old format (html_source)
+    // Old records from before v3 may only have html_source (truncated) or docx_base64
+    const htmlContent = reportContent.html || reportContent.html_source || null;
+
+    if (!htmlContent) {
+      return res.status(400).json({
+        error: "No HTML report found. This reading was generated before HTML storage was added. It cannot be downloaded — the data is a DOCX that failed to generate."
+      });
     }
 
     const fileName = reportContent.html_filename || "report.html";
 
     console.log(
-      `[admin.js] >>> Sending HTML download | readingId=${req.params.id} | fileName="${fileName}" | size=${reportContent.html.length}`
+      `[admin.js] >>> Sending HTML download | readingId=${req.params.id} | fileName="${fileName}" | size=${htmlContent.length}`
     );
 
     res.setHeader("Content-Type", "text/html; charset=utf-8");
     res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
-    res.send(reportContent.html);
+    res.send(htmlContent);
 
   } catch (err) {
     console.error(err);

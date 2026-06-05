@@ -2,12 +2,15 @@
 //  src/routes/webhook.js
 //  POST /webhook/razorpay
 //
-//  Fixed:
-//    1. Profile insert now uses correct Chaldean v3 column names
-//    2. Reading is actually generated + email triggered after capture
-//    3. res.json() called immediately, processing happens async
-//    4. subject_dob from DB is a Date object — converted to string
-//       before passing to buildNumerologyProfile()
+//  v2 — Manual fulfilment flow
+//
+//  CHANGES from v1:
+//    - Reading is inserted with status = 'pending' (not 'generated')
+//    - The auto email + mark-delivered block is REMOVED
+//      (email delivery is now manual via the admin Fulfilment Queue)
+//    - engine_config column added to INSERT
+//    - engine_used still recorded (what actually ran)
+//    - _engine_config / _engine_used tags read from dispatcher result
 // ============================================================
 const express  = require('express');
 const router   = express.Router();
@@ -27,56 +30,40 @@ router.post('/', async (req, res) => {
 
   // ── Signature verification ──────────────────────────────────
   log(1, 'Verifying Razorpay signature');
-  console.log(`[${FILE}] >>> STEP 1 START: signature verification`);
   const receivedSig = req.headers['x-razorpay-signature'];
   const expectedSig = crypto
     .createHmac('sha256', process.env.RAZORPAY_WEBHOOK_SECRET)
-    .update(req.body)           // raw Buffer — needs express.raw() in server.js
+    .update(req.body)
     .digest('hex');
 
-  console.log(`[${FILE}] >>> STEP 1: signatures computed | match=${receivedSig === expectedSig}`);
-
   if (receivedSig !== expectedSig) {
-    console.warn(`[${FILE}] >>> STEP 1 FAIL: invalid signature — rejecting request`);
-    console.warn('Webhook: invalid signature — rejected');
+    console.warn(`[${FILE}] >>> STEP 1 FAIL: invalid signature — rejecting`);
     return res.status(400).json({ error: 'Invalid signature' });
   }
-  console.log(`[${FILE}] >>> STEP 1 DONE: signature verified`);
 
   let event;
   try {
-    console.log(`[${FILE}] >>> STEP 2 START: parsing JSON body`);
     event = JSON.parse(req.body.toString());
-    console.log(`[${FILE}] >>> STEP 2 DONE: event parsed | event.event="${event.event}"`);
   } catch (err) {
-    console.error(`[${FILE}] >>> STEP 2 FAIL: JSON parse error | message="${err.message}"`);
     return res.status(400).json({ error: 'Invalid JSON body' });
   }
 
   log(2, 'Event received', { event: event.event });
-  console.log(`[${FILE}] >>> STEP 3: checking event type | event.event="${event.event}"`);
 
   if (event.event !== 'payment.captured') {
-    console.log(`[${FILE}] >>> STEP 3: event ignored (not payment.captured) | event="${event.event}"`);
     return res.json({ received: true, action: 'ignored' });
   }
-  console.log(`[${FILE}] >>> STEP 3 DONE: event is payment.captured — proceeding`);
 
   const payment   = event.payload.payment.entity;
   const rpOrderId = payment.order_id;
   const rpPayId   = payment.id;
-  console.log(`[${FILE}] >>> STEP 3: payment details extracted | rpOrderId="${rpOrderId}" rpPayId="${rpPayId}"`);
 
   // ── Respond to Razorpay immediately — then process async ────
-  // Razorpay retries on non-200. Respond first, process after.
-  console.log(`[${FILE}] >>> STEP 4: sending immediate 200 response to Razorpay`);
   res.json({ received: true });
-  console.log(`[${FILE}] >>> STEP 4 DONE: response sent — continuing async processing`);
 
   try {
     // ── 1. Load order + customer ────────────────────────────────
-    log(5, 'Loading order + customer from DB');
-    console.log(`[${FILE}] >>> STEP 5 START: dbGet() — loading order by gateway_order_id="${rpOrderId}"`);
+    log(5, 'Loading order from DB');
     const order = await dbGet(
       `SELECT o.*,
               c.full_name AS customer_full_name,
@@ -87,24 +74,19 @@ router.post('/', async (req, res) => {
        WHERE o.gateway_order_id = $1`,
       [rpOrderId]
     );
-    console.log(`[${FILE}] >>> STEP 5 DONE: order query returned | found=${!!order}`);
 
     if (!order) {
-      console.warn(`[${FILE}] >>> STEP 5 WARN: no order found for gateway_order_id="${rpOrderId}" — aborting`);
-      console.warn(`Webhook: no order found for gateway_order_id ${rpOrderId}`);
+      console.warn(`[${FILE}] >>> no order found for gateway_order_id="${rpOrderId}" — aborting`);
       return;
     }
 
     if (order.status === 'paid') {
-      console.log(`[${FILE}] >>> STEP 5 SKIP: order already paid | orderId=${order.id} — aborting`);
-      console.log(`Webhook: order ${order.id} already paid — skipped`);
+      console.log(`[${FILE}] >>> order ${order.id} already paid — skipped`);
       return;
     }
-    console.log(`[${FILE}] >>> STEP 5: order loaded | orderId=${order.id} status="${order.status}" productSlug="${order.product_slug}"`);
 
     // ── 2. Mark order as paid ───────────────────────────────────
     log(6, 'Marking order as paid');
-    console.log(`[${FILE}] >>> STEP 6 START: dbRun() — updating order status to paid | orderId=${order.id}`);
     await dbRun(
       `UPDATE orders
        SET status             = 'paid',
@@ -122,52 +104,37 @@ router.post('/', async (req, res) => {
         order.id,
       ]
     );
-    console.log(`[${FILE}] >>> STEP 6 DONE: order marked as paid`);
 
     // ── 3. Upgrade customer tier ────────────────────────────────
     log(7, 'Upgrading customer tier');
-    console.log(`[${FILE}] >>> STEP 7 START: dbRun() — upgrading customer tier | userId=${order.user_id}`);
     await dbRun(
       `UPDATE customers
        SET tier = 'paid_reading', updated_at = NOW()
        WHERE id = $1 AND tier = 'free_reading'`,
       [order.user_id]
     );
-    console.log(`[${FILE}] >>> STEP 7 DONE: customer tier upgrade query executed`);
 
     // ── 4. Build numerology profile ─────────────────────────────
-    // Use subject fields from the order (set at purchase time).
     const subjectName = order.subject_name || order.customer_full_name;
     const rawDob      = order.subject_dob  || order.customer_dob;
+    const subjectDob  = rawDob instanceof Date
+      ? rawDob.toISOString().split('T')[0]
+      : String(rawDob);
 
-    // FIX: pg returns DATE columns as JS Date objects, not strings.
-    // buildNumerologyProfile() calls dob.split('-') and expects "YYYY-MM-DD".
-    const subjectDob = rawDob instanceof Date
-      ? rawDob.toISOString().split('T')[0]   // Date → "2003-11-12"
-      : String(rawDob);                      // already a string — leave it
-
-    console.log(`[${FILE}] >>> STEP 8: subject resolved | subjectName="${subjectName}" rawDob="${rawDob}" subjectDob="${subjectDob}"`);
-
-    // Build the profile (needed for both the DB insert and engine dispatch)
     log(8, 'Building numerology profile');
-    console.log(`[${FILE}] >>> STEP 8 START: buildNumerologyProfile() | subjectName="${subjectName}" subjectDob="${subjectDob}"`);
     const p = buildNumerologyProfile(subjectName, subjectDob);
-    console.log(`[${FILE}] >>> STEP 8 DONE: profile built | keys=${Object.keys(p).length}`);
 
+    // Check for / create profile
     let profileId;
-    console.log(`[${FILE}] >>> STEP 9 START: dbGet() — checking for existing primary profile | userId=${order.user_id}`);
     const existing = await dbGet(
       `SELECT id FROM numerology_profiles
        WHERE user_id = $1 AND is_primary = TRUE LIMIT 1`,
       [order.user_id]
     );
-    console.log(`[${FILE}] >>> STEP 9 DONE: existing profile check | found=${!!existing}`);
 
     if (existing) {
       profileId = existing.id;
-      console.log(`[${FILE}] >>> STEP 9 SKIP: using existing profile | profileId=${profileId}`);
     } else {
-      console.log(`[${FILE}] >>> STEP 9.1 START: dbRun() — inserting new numerology profile`);
       const result = await dbRun(
         `INSERT INTO numerology_profiles (
           user_id, name_used, dob_used, is_primary,
@@ -268,12 +235,11 @@ router.post('/', async (req, res) => {
         ]
       );
       profileId = result.rows[0].id;
-      console.log(`[${FILE}] >>> STEP 9.1 DONE: new profile inserted | profileId=${profileId}`);
     }
     log(9, 'Profile ready', { profileId });
 
-    // ── 5. Generate report via engine ───────────────────────────
-    // Attach meta so AI prompts can personalise by name / gender
+    // ── 5. Pre-calculate report (optional — stored for admin use) ─
+    // Attach meta for AI prompts
     p._meta = {
       subject_name:   subjectName,
       subject_gender: order.subject_gender || 'Prefer not to say',
@@ -281,116 +247,66 @@ router.post('/', async (req, res) => {
       customer_name:  order.customer_full_name,
       product_slug:   order.product_slug,
     };
-    console.log(`[${FILE}] >>> STEP 10: _meta attached to profile | subject_name="${subjectName}" product_slug="${order.product_slug}"`);
 
     log(10, 'Dispatching to engine');
-    console.log(`[${FILE}] >>> STEP 10 START: dispatcher.dispatch() | product_slug="${order.product_slug}"`);
-    let report = null;
+    const settings = require('../reading.settings');
+    const engineConfig = settings.defaultEngine;
+
+    let report      = null;
+    let engineUsed  = engineConfig;
+
     try {
-      report = await dispatcher.dispatch(order.product_slug, p);
-      console.log(`[${FILE}] >>> STEP 10 DONE: engine dispatch succeeded | report=${report ? 'object' : 'null'}`);
+      const result = await dispatcher.dispatch(order.product_slug, p);
+      report      = result;
+      // Read engine tags if dispatcher attached them
+      engineUsed  = result?._engine_used  || engineConfig;
     } catch (err) {
-      console.error(`[${FILE}] >>> STEP 10 FAIL: engine dispatch failed | product_slug="${order.product_slug}" message="${err.message}"`);
-      console.error(`Webhook: engine dispatch failed for ${order.product_slug}:`, err.message);
-      // Still write reading record as 'failed' so admin can retry
+      console.error(`[${FILE}] >>> engine dispatch failed | message="${err.message}"`);
+      // report stays null — reading still inserted as pending
     }
 
-    const engine = require('../reading.settings').defaultEngine;
-    console.log(`[${FILE}] >>> STEP 10: engine resolved | engine="${engine}"`);
-
-    // ── 6. Save reading record ──────────────────────────────────
-    log(11, 'Saving reading record');
-    console.log(`[${FILE}] >>> STEP 11 START: dbRun() — inserting reading record | userId=${order.user_id} profileId=${profileId} status="${report ? 'generated' : 'failed'}"`);
+    // ── 6. Insert reading record as PENDING ────────────────────
+    // status = 'pending' means: payment received, report NOT yet sent.
+    // Admin Fulfilment Queue shows all readings with this status.
+    // Admin changes to 'delivered' manually via mark-sent endpoint.
+    log(11, 'Saving reading record (status=pending)');
     const readingResult = await dbRun(
       `INSERT INTO readings
          (user_id, profile_id, order_id,
           product_slug, status,
-          report_content, engine_used,
+          report_content, engine_config, engine_used,
           language, delivered_to, generated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,'en',$8,NOW())
+       VALUES ($1,$2,$3,$4,'pending',$5,$6,$7,'en',$8,NOW())
        RETURNING id`,
       [
         order.user_id,
         profileId,
         order.id,
         order.product_slug,
-        report ? 'generated' : 'failed',
         report ? JSON.stringify(report) : null,
-        engine,
+        engineConfig,
+        engineUsed,
         order.customer_email,
       ]
     );
     const readingId = readingResult.rows[0].id;
-    log(12, 'Reading record saved', { readingId });
-    console.log(`[${FILE}] >>> STEP 11 DONE: reading record inserted | readingId=${readingId}`);
 
-    // ── 7. Send email ───────────────────────────────────────────
-    if (report) {
-      console.log(`[${FILE}] >>> STEP 12 START: sendReportEmail() | customerEmail="${order.customer_email}" subjectName="${subjectName}"`);
-      await sendReportEmail({
-        customerEmail: order.customer_email,
-        customerName:  order.customer_full_name,
-        subjectName,
-        productSlug:   order.product_slug,
-        report,
-      });
-      console.log(`[${FILE}] >>> STEP 12 DONE: email sent (or logged in dev)`);
+    log(12, 'Reading saved — awaiting manual fulfilment', {
+      readingId,
+      orderId:     order.id,
+      productSlug: order.product_slug,
+      subjectName,
+      engineConfig,
+      engineUsed,
+    });
 
-      console.log(`[${FILE}] >>> STEP 13 START: dbRun() — marking reading as delivered | readingId=${readingId}`);
-      await dbRun(
-        `UPDATE readings SET status = 'delivered', delivered_at = NOW() WHERE id = $1`,
-        [readingId]
-      );
-      console.log(`[${FILE}] >>> STEP 13 DONE: reading marked as delivered`);
-    } else {
-      console.warn(`[${FILE}] >>> STEP 12 SKIP: report is null — email not sent | readingId=${readingId}`);
-    }
-
-    console.log(`[${FILE}] >>> EXIT async processing SUCCESS | orderId=${order.id} readingId=${readingId} productSlug="${order.product_slug}" subjectName="${subjectName}"`);
-    console.log(`Payment processed: order ${order.id} | reading ${readingId} | ${order.product_slug} | ${subjectName}`);
+    console.log(`[${FILE}] >>> Payment processed | orderId=${order.id} readingId=${readingId} status=pending | ${order.product_slug} | ${subjectName}`);
+    console.log(`[${FILE}] >>> ACTION REQUIRED: open admin Fulfilment Queue to send report`);
 
   } catch (err) {
-    console.error(`[${FILE}] >>> STEP 99 FATAL ERROR in async processing | message="${err.message}"`);
+    console.error(`[${FILE}] >>> FATAL ERROR in async processing | message="${err.message}"`);
     console.error(`[${FILE}] >>> STACK TRACE:`, err.stack);
-    console.error('Webhook: processing error:', err.message, err.stack);
   }
 });
-
-// ── Email delivery ──────────────────────────────────────────────
-// Currently logs to console. Uncomment a provider block to send real email.
-async function sendReportEmail({ customerEmail, customerName, subjectName, productSlug, report }) {
-  console.log(`[${FILE}] >>> ENTER sendReportEmail() | customerEmail="${customerEmail}" subjectName="${subjectName}" productSlug="${productSlug}"`);
-  console.log(`
-==== REPORT EMAIL (dev — not sent) ====
-To:      ${customerEmail}
-For:     ${subjectName}
-Product: ${productSlug}
-========================================`);
-  console.log(`[${FILE}] >>> EXIT sendReportEmail() (dev mode — no email sent)`);
-
-  // ── Nodemailer (any SMTP — Gmail, Zoho, etc.) ────────────────
-  // const nodemailer = require('nodemailer');
-  // const transporter = nodemailer.createTransport({
-  //   host: process.env.SMTP_HOST,
-  //   port: parseInt(process.env.SMTP_PORT || '587'),
-  //   auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
-  // });
-  // await transporter.sendMail({
-  //   from:    `"KnowSelfNow" <${process.env.SMTP_FROM}>`,
-  //   to:      customerEmail,
-  //   subject: `Your ${productSlug} reading is ready`,
-  //   html:    buildEmailHtml({ customerName, subjectName, productSlug, report }),
-  // });
-
-  // ── Resend (easiest option, free tier available) ─────────────
-  // const { Resend } = require('resend');
-  // const resend = new Resend(process.env.RESEND_API_KEY);
-  // await resend.emails.send({
-  //   from:    'KnowSelfNow <hello@yourdomain.com>',
-  //   to:      customerEmail,
-  //   subject: `Your ${productSlug} reading is ready`,
-  //   html:    buildEmailHtml({ customerName, subjectName, productSlug, report }),
-  // });
-}
 
 module.exports = router;

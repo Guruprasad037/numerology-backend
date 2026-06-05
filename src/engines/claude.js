@@ -44,7 +44,7 @@ async function run(prompt) {
       },
       body: JSON.stringify({
         model: "claude-sonnet-4-6",
-        max_tokens: 3500,
+        max_tokens: 6000,
         messages: [
           { role: "user", content: prompt }
         ],

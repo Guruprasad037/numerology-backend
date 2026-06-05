@@ -244,7 +244,7 @@ router.get('/readings', async (req, res) => {
           `SELECT r.id, r.user_id, r.profile_id, r.order_id,
                   c.full_name AS customer_full_name, c.email,
                   o.customer_name, o.subject_name, o.subject_dob, o.is_self,
-                  r.product_slug, r.status, r.engine_used,
+                  r.product_slug, r.status, r.engine_config, r.engine_used,
                   r.report_content, r.report_text,
                   r.delivered_to, r.generated_at, r.delivered_at, r.created_at
            FROM readings r
@@ -258,7 +258,7 @@ router.get('/readings', async (req, res) => {
           `SELECT r.id, r.user_id, r.profile_id, r.order_id,
                   c.full_name AS customer_full_name, c.email,
                   o.customer_name, o.subject_name, o.subject_dob, o.is_self,
-                  r.product_slug, r.status, r.engine_used,
+                  r.product_slug, r.status, r.engine_config, r.engine_used,
                   r.report_content, r.report_text,
                   r.delivered_to, r.generated_at, r.delivered_at, r.created_at
            FROM readings r

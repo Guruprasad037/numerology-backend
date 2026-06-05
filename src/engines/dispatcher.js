@@ -1,54 +1,125 @@
 // ============================================================
 //  src/engines/dispatcher.js
-//  Reads reading.settings.js and routes to the right engine.
-//  Automatically falls back if the primary engine throws.
+//  v2 — tags result with _engine_config and _engine_used
+//
+//  CHANGE from v1:
+//    - After running an engine (or falling back), attaches two
+//      metadata fields to the result object:
+//        result._engine_config = what reading.settings.js requested
+//        result._engine_used   = what actually ran and produced content
+//    - free-reading.js reads these tags and passes both to saveReading()
+//    - This fixes the bug where fallback readings were labelled "claude"
 // ============================================================
-const settings   = require('../reading.settings');
-const hardcoded  = require('./hardcoded');
-// Lazy-load AI engines only if actually configured —
-// avoids crashing on startup if SDK packages aren't installed yet.
+
+const path    = require('path');
+const settings = require('../reading.settings');
+
+const FILE = 'dispatcher';
+
+function log(msg, data) {
+  if (data !== undefined) {
+    console.log(`[${FILE}] ${msg}`, typeof data === 'object' ? JSON.stringify(data, null, 2) : data);
+  } else {
+    console.log(`[${FILE}] ${msg}`);
+  }
+}
+
+// Cache loaded engines
+const engineCache = {};
+
 function loadEngine(name) {
-  console.log(`[dispatcher] loadEngine called with name: "${name}"`);
-  switch (name) {
-    case 'claude':     return require('./claude');
-    case 'openai':     return require('./openai');
-    case 'hardcoded':  return hardcoded;
-    default:
-      throw new Error(`Unknown engine: "${name}". Must be claude | openai | hardcoded.`);
+  log(`loadEngine called with name: "${name}"`);
+  if (engineCache[name]) return engineCache[name];
+  try {
+    const engine = require(path.join(__dirname, `${name}.js`));
+    engineCache[name] = engine;
+    log(`engine "${name}" loaded and cached`);
+    return engine;
+  } catch (err) {
+    log(`failed to load engine "${name}": ${err.message}`);
+    throw err;
   }
 }
+
+function loadPrompt(service, version) {
+  const promptFile = `${service}_${version}.js`;
+  log(`loading prompt file: ${promptFile}`);
+  try {
+    const buildPrompt = require(path.join(__dirname, '../prompts', promptFile));
+    log(`prompt file loaded successfully: ${promptFile}`);
+    return buildPrompt;
+  } catch (err) {
+    log(`failed to load prompt file "${promptFile}": ${err.message}`);
+    throw err;
+  }
+}
+
+// ── Tag helper ───────────────────────────────────────────────
+// Attaches _engine_config and _engine_used to the result.
+// These are internal metadata fields — prefixed with _ so they
+// are clearly not numerology data. They are read by free-reading.js
+// and passed to saveReading() for accurate DB recording.
+function tagResult(result, engineConfig, engineUsed) {
+  if (result && typeof result === 'object') {
+    result._engine_config = engineConfig;
+    result._engine_used   = engineUsed;
+  }
+  return result;
+}
+
+// ── Main dispatch ────────────────────────────────────────────
 async function dispatch(service, profile) {
-  console.log(`[dispatcher] dispatch called — service: "${service}", profile:`, profile);
-  const engineName = settings.engineOverrides[service] || settings.defaultEngine;
-  const version    = settings.promptVersions[service];
-  console.log(`[dispatcher] resolved engine: "${engineName}", prompt version: "${version}"`);
-  // hardcoded engine does not use prompt files — it has its own lookup tables
-  if (engineName === 'hardcoded') {
-    console.log(`[dispatcher] routing to hardcoded engine for service: "${service}"`);
-    return hardcoded.run(service, profile);
+  log(`dispatch called — service: "${service}", profile: `, profile);
+
+  const { engine: engineConfig, promptVersion } = settings.resolveSettings(service);
+  log(`resolved engine: "${engineConfig}", prompt version: "${promptVersion}"`);
+
+  // ── Try the configured engine ────────────────────────────
+  if (engineConfig !== 'hardcoded') {
+    try {
+      log(`loading engine: "${engineConfig}"`);
+      const engine = loadEngine(engineConfig);
+
+      // Build prompt for AI engines
+      const buildPrompt = loadPrompt(service, promptVersion);
+      const prompt = buildPrompt(profile);
+      log(`prompt built for service: "${service}": ${prompt.slice(0, 300)}`);
+
+      log(`running engine: "${engineConfig}"`);
+      const result = await engine.run(prompt);
+
+      // ✓ Success — tag with actual engine used
+      log(`engine "${engineConfig}" succeeded`);
+      return tagResult(result, engineConfig, engineConfig);
+
+    } catch (err) {
+      // ✗ Failed — log and fall through to fallback
+      log(
+        `${engineConfig} failed — falling back to hardcoded. ${err.message}`
+      );
+    }
   }
-  // For AI engines, load the versioned prompt file
-  let buildPrompt;
+
+  // ── Fallback: hardcoded engine ───────────────────────────
   try {
-    console.log(`[dispatcher] loading prompt file: ${service}_${version}.js`);
-    buildPrompt = require(`../prompts/${service}_${version}`);
-    console.log(`[dispatcher] prompt file loaded successfully: ${service}_${version}.js`);
-  } catch (err) {
-    console.warn(`[dispatcher] Prompt file not found: ${service}_${version}.js — falling back`);
-    return hardcoded.run(service, profile);
-  }
-  const prompt = buildPrompt(profile);
-  console.log(`[dispatcher] prompt built for service: "${service}":`, prompt);
-  try {
-    console.log(`[dispatcher] loading engine: "${engineName}"`);
-    const engine = loadEngine(engineName);
-    console.log(`[dispatcher] running engine: "${engineName}"`);
-    const result = await engine.run(prompt);
-    console.log(`[dispatcher] engine "${engineName}" returned result:`, result);
-    return result;
-  } catch (err) {
-    console.warn(`[dispatcher] ${engineName} failed — falling back to hardcoded. ${err.message}`);
-    return hardcoded.run(service, profile);
+    log(`loading engine: "hardcoded"`);
+    const hardcoded = loadEngine('hardcoded');
+
+    log(`running engine: "hardcoded"`);
+    const result = hardcoded.run(service, profile);
+
+    // Tag: config = what was requested, used = hardcoded (fallback)
+    log(
+      engineConfig === 'hardcoded'
+        ? `hardcoded engine ran as configured`
+        : `hardcoded fallback succeeded — engine_config="${engineConfig}", engine_used="hardcoded"`
+    );
+    return tagResult(result, engineConfig, 'hardcoded');
+
+  } catch (fallbackErr) {
+    log(`hardcoded fallback also failed: ${fallbackErr.message}`);
+    throw fallbackErr;
   }
 }
+
 module.exports = { dispatch };

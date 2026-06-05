@@ -1,308 +1,237 @@
 // ============================================================
-//  src/services/paid-reading.js
-//  v1 — Paid reading delivery orchestrator
+//  src/services/paid-reading.js  v2
 //
-//  MODE 1: Manual — skip generation, insert pending
-//  MODE 2: Auto   — generate HTML via Claude → convert to DOCX
-//
-//  Input:  Order, Subject, Product slug
-//  Output: Reading record inserted, DOCX generated if MODE 2
+//  CHANGES from v1:
+//    - PAID_REPORT_DELIVERY_MODE removed entirely
+//    - Always generates a report (engine controls cost, not mode)
+//    - Handles both result shapes from dispatcher:
+//        { _html, _engine_config, _engine_used }  ← hardcoded paid
+//        { cards, cta, ... }                       ← claude (JSON)
+//    - If dispatcher fails entirely, falls back to buildFallbackHTML()
 // ============================================================
 
-const settings = require("../reading.settings");
-const dispatcher = require("../engines/dispatcher");
-const { htmlToDocx, generateFileName } = require("../engines/docx-generator");
-const { buildNumerologyProfile } = require("../utils/calculator");
-const { dbRun, dbGet } = require("../config/db");
+const settings                  = require('../reading.settings');
+const dispatcher                = require('../engines/dispatcher');
+const { htmlToDocx, generateFileName } = require('../engines/docx-generator');
+const { dbRun }                 = require('../config/db');
 
-const FILE = "src/services/paid-reading.js";
+const FILE = 'src/services/paid-reading.js';
 
 function log(step, message, data = null) {
-  console.log(
-    `[${FILE}] STEP ${step} ${message}`,
-    data ? JSON.stringify(data, null, 2) : ""
-  );
+  console.log(`[${FILE}] STEP ${step} ${message}`, data ? JSON.stringify(data, null, 2) : '');
 }
 
 function error(step, message, data = null) {
-  console.error(
-    `[${FILE}] ❌ STEP ${step} ${message}`,
-    data ? JSON.stringify(data, null, 2) : ""
-  );
+  console.error(`[${FILE}] ❌ STEP ${step} ${message}`, data ? JSON.stringify(data, null, 2) : '');
 }
 
 // ────────────────────────────────────────────────────────────
-// Main handler for paid readings
+// Main entry point
 // ────────────────────────────────────────────────────────────
 async function handlePaidReading(order, profile, profileId) {
-  log(1, "handlePaidReading() called", {
-    orderId: order.id,
+  log(1, 'handlePaidReading() called', {
+    orderId:     order.id,
     subjectName: order.subject_name,
     productSlug: order.product_slug,
-    mode: settings.PAID_REPORT_DELIVERY_MODE,
+    engine:      settings.PAID_READING_ENGINE,
   });
 
-  const mode = settings.PAID_REPORT_DELIVERY_MODE;
+  let htmlReport    = null;
+  let engineConfig  = settings.PAID_READING_ENGINE;
+  let engineUsed    = 'unknown';
 
-  if (mode === 1) {
-    log(2, "MODE 1 detected: Manual delivery");
-    return handleModeManual(order, profile, profileId);
-  } else if (mode === 2) {
-    log(2, "MODE 2 detected: Auto-generate with Claude");
-    return handleModeAuto(order, profile, profileId);
-  } else {
-    throw new Error(`Unknown PAID_REPORT_DELIVERY_MODE: ${mode}`);
-  }
-}
-
-// ────────────────────────────────────────────────────────────
-// MODE 1: Manual Delivery
-// ────────────────────────────────────────────────────────────
-async function handleModeManual(order, profile, profileId) {
-  log(3, "MODE 1: Inserting reading as PENDING (manual delivery)");
-
+  // ── Step 1: Generate HTML via dispatcher ─────────────────
   try {
-    const readingResult = await dbRun(
-      `INSERT INTO readings
-         (user_id, profile_id, order_id,
-          product_slug, status,
-          report_content, engine_config, engine_used,
-          language, delivered_to, generated_at)
-       VALUES ($1,$2,$3,$4,'pending',$5,$6,$7,'en',$8,NOW())
-       RETURNING id`,
-      [
-        order.user_id,
-        profileId,
-        order.id,
-        order.product_slug,
-        JSON.stringify({
-          type: "manual",
-          mode: 1,
-          note: "Manual delivery — admin will generate report",
-          profile_summary: {
-            psychic: profile.psychic_number,
-            destiny: profile.destiny_number,
-            name: profile.name_number,
-            life_path: profile.life_path_number,
-          },
-        }),
-        "manual",
-        "manual",
-        order.customer_email,
-      ]
-    );
+    log(2, `Dispatching "${order.product_slug}" to engine="${engineConfig}"`);
 
-    const readingId = readingResult.rows[0].id;
+    const dispatchResult = await dispatcher.dispatch(order.product_slug, profile);
 
-    log(4, "MODE 1 complete", {
-      readingId,
-      status: "pending",
-      action: "Admin will manually create report",
-    });
+    // Read metadata tags
+    engineConfig = dispatchResult._engine_config || settings.PAID_READING_ENGINE;
+    engineUsed   = dispatchResult._engine_used   || 'unknown';
 
-    console.log(
-      `[${FILE}] >>> MODE 1 SUCCESS | readingId=${readingId} | status=pending | waiting for manual creation`
-    );
+    // ── Extract HTML from result ──────────────────────────
+    // Shape A: hardcoded paid reading wraps HTML in _html field
+    // Shape B: claude returns JSON with cards array
+    if (dispatchResult._html) {
+      // Hardcoded engine — HTML is ready
+      htmlReport = dispatchResult._html;
+      log(3, 'HTML from hardcoded engine', { length: htmlReport.length });
 
-    return {
-      success: true,
-      mode: 1,
-      readingId,
-      status: "pending",
-      message: "Awaiting manual report generation",
-    };
-  } catch (err) {
-    error(99, "MODE 1 failed", { message: err.message });
-    throw err;
-  }
-}
+    } else if (dispatchResult.cards && dispatchResult.cards.length > 0) {
+      // Claude returned structured JSON — build HTML from cards
+      htmlReport = buildHTMLFromCards(dispatchResult, profile);
+      log(3, 'HTML built from Claude cards', { cardCount: dispatchResult.cards.length, length: htmlReport.length });
 
-// ────────────────────────────────────────────────────────────
-// MODE 2: Auto-Generate with Claude
-// ────────────────────────────────────────────────────────────
-async function handleModeAuto(order, profile, profileId) {
-  log(5, "MODE 2: Auto-generating report with Claude");
-
-  let htmlReport = null;
-  let docxResult = null;
-  let engineUsed = "unknown";
-  let engineConfig = settings.paidReadingEngine;
-
-  try {
-    // ── Step 1: Generate HTML via dispatcher ─────────────────
-    log(6, "Dispatching to Claude to generate HTML");
-    console.log(`[${FILE}] >>> STEP 6 START: dispatcher.dispatch() for product="${order.product_slug}"`);
-
-    try {
-      const dispatchResult = await dispatcher.dispatch(
-        order.product_slug,
-        profile
-      );
-
-      // Read engine metadata from dispatcher
-      engineConfig = dispatchResult._engine_config || settings.paidReadingEngine;
-      engineUsed = dispatchResult._engine_used || "unknown";
-
-      // The result should be HTML text (from Claude)
-      htmlReport = dispatchResult.cards?.[0]?.body || dispatchResult.birth?.text || null;
-
-      log(7, "Dispatcher returned result", {
-        htmlLength: htmlReport ? htmlReport.length : 0,
-        engineConfig,
-        engineUsed,
-        htmlPreview: htmlReport ? htmlReport.slice(0, 200) : null,
+    } else {
+      log(3, 'Dispatcher returned unexpected shape — will use fallback', {
+        keys: Object.keys(dispatchResult).filter(k => !k.startsWith('_')),
       });
-
-      console.log(
-        `[${FILE}] >>> STEP 6 DONE: HTML received | length=${htmlReport ? htmlReport.length : 0}`
-      );
-    } catch (dispatchErr) {
-      error(6.1, "Dispatcher failed — continuing without HTML", {
-        message: dispatchErr.message,
-      });
-      htmlReport = null;
     }
 
-    // ── Step 2: Convert HTML → DOCX ──────────────────────────
-    if (!htmlReport) {
-      log(8, "No HTML report from Claude — creating fallback");
-      htmlReport = buildFallbackHTML(profile);
-    }
-
-    log(9, "Converting HTML → DOCX");
-    console.log(`[${FILE}] >>> STEP 9 START: htmlToDocx() conversion`);
-
-    const fileName = generateFileName(order.subject_name || order.customer_name);
-    docxResult = await htmlToDocx(htmlReport, fileName);
-
-    log(10, "DOCX generated successfully", {
-      fileName: docxResult.fileName,
-      size: docxResult.size,
-      base64Length: docxResult.base64.length,
-    });
-
-    console.log(`[${FILE}] >>> STEP 9 DONE: DOCX ready | size=${docxResult.size} bytes`);
-
-    // ── Step 3: Save to database ─────────────────────────────
-    log(11, "Saving reading with DOCX to database");
-    console.log(
-      `[${FILE}] >>> STEP 11 START: dbRun() — inserting reading with DOCX`
-    );
-
-    const reportContent = {
-      type: "docx",
-      mode: 2,
-      html_source: htmlReport.slice(0, 5000), // Store first 5000 chars of HTML
-      docx_base64: docxResult.base64,
-      docx_filename: docxResult.fileName,
-      docx_size: docxResult.size,
-      generated_at: new Date().toISOString(),
-      engine_config: engineConfig,
-      engine_used: engineUsed,
-    };
-
-    const readingResult = await dbRun(
-      `INSERT INTO readings
-         (user_id, profile_id, order_id,
-          product_slug, status,
-          report_content, engine_config, engine_used,
-          language, delivered_to, generated_at)
-       VALUES ($1,$2,$3,$4,'generated',$5,$6,$7,'en',$8,NOW())
-       RETURNING id`,
-      [
-        order.user_id,
-        profileId,
-        order.id,
-        order.product_slug,
-        JSON.stringify(reportContent),
-        engineConfig,
-        engineUsed,
-        order.customer_email,
-      ]
-    );
-
-    const readingId = readingResult.rows[0].id;
-
-    log(12, "MODE 2 complete", {
-      readingId,
-      status: "generated",
-      docxFilename: docxResult.fileName,
-      docxSize: docxResult.size,
-      action: "Admin can now download and review",
-    });
-
-    console.log(
-      `[${FILE}] >>> STEP 11 DONE: reading inserted with DOCX | readingId=${readingId}`
-    );
-    console.log(
-      `[${FILE}] >>> MODE 2 SUCCESS | readingId=${readingId} | status=generated | docx_ready_for_download`
-    );
-
-    return {
-      success: true,
-      mode: 2,
-      readingId,
-      status: "generated",
-      docxFileName: docxResult.fileName,
-      docxSize: docxResult.size,
-      message: "Report generated and ready for review",
-    };
-  } catch (err) {
-    error(99, "MODE 2 failed", { message: err.message, stack: err.stack });
-    throw err;
+  } catch (dispatchErr) {
+    error(2, 'Dispatcher failed — will use fallback HTML', { message: dispatchErr.message });
+    engineUsed = 'hardcoded';
   }
-}
 
-// ────────────────────────────────────────────────────────────
-// Fallback HTML if Claude fails
-// ────────────────────────────────────────────────────────────
-function buildFallbackHTML(profile) {
-  log("build-fallback", "Creating fallback HTML");
+  // ── Step 2: Fallback if still no HTML ────────────────────
+  if (!htmlReport) {
+    log(4, 'Using emergency fallback HTML');
+    htmlReport   = buildFallbackHTML(profile);
+    engineUsed   = 'hardcoded';
+  }
 
-  const colors = {
-    primary_dark: "#2c3e50",
-    primary_blue: "#3498db",
-    accent_gold: "#f39c12",
-    table_header: "#34495e",
-    table_alt_row: "#ecf0f1",
+  // ── Step 3: Convert HTML → DOCX ──────────────────────────
+  log(5, 'Converting HTML → DOCX');
+  const fileName  = generateFileName(order.subject_name || order.customer_name);
+  const docxResult = await htmlToDocx(htmlReport, fileName);
+
+  log(6, 'DOCX generated', { fileName: docxResult.fileName, size: docxResult.size });
+
+  // ── Step 4: Save to database ─────────────────────────────
+  log(7, 'Saving reading to database');
+
+  const reportContent = {
+    type:          'docx',
+    html_source:   htmlReport.slice(0, 5000),  // first 5000 chars for reference
+    docx_base64:   docxResult.base64,
+    docx_filename: docxResult.fileName,
+    docx_size:     docxResult.size,
+    generated_at:  new Date().toISOString(),
+    engine_config: engineConfig,
+    engine_used:   engineUsed,
   };
 
-  return `
-<!DOCTYPE html>
-<html>
-<head>
+  const readingResult = await dbRun(
+    `INSERT INTO readings
+       (user_id, profile_id, order_id,
+        product_slug, status,
+        report_content, engine_config, engine_used,
+        language, delivered_to, generated_at)
+     VALUES ($1,$2,$3,$4,'generated',$5,$6,$7,'en',$8,NOW())
+     RETURNING id`,
+    [
+      order.user_id,
+      profileId,
+      order.id,
+      order.product_slug,
+      JSON.stringify(reportContent),
+      engineConfig,
+      engineUsed,
+      order.customer_email,
+    ]
+  );
+
+  const readingId = readingResult.rows[0].id;
+
+  log(8, 'Reading saved', {
+    readingId,
+    status:      'generated',
+    engineConfig,
+    engineUsed,
+    docxFilename: docxResult.fileName,
+    docxSize:     docxResult.size,
+  });
+
+  console.log(`[${FILE}] >>> SUCCESS | readingId=${readingId} | engine_config=${engineConfig} | engine_used=${engineUsed} | docx_ready_for_download`);
+
+  return {
+    success:      true,
+    readingId,
+    status:       'generated',
+    engineConfig,
+    engineUsed,
+    docxFileName: docxResult.fileName,
+    docxSize:     docxResult.size,
+    message:      'Report generated and ready for review',
+  };
+}
+
+// ────────────────────────────────────────────────────────────
+// Build HTML from Claude's card JSON response
+// Used when PAID_READING_ENGINE=claude and Claude returns cards
+// ────────────────────────────────────────────────────────────
+function buildHTMLFromCards(dispatchResult, profile) {
+  const name = profile.name_used || profile.name || 'Client';
+  const C = {
+    dark: '#2c3e50', blue: '#3498db', gold: '#f39c12',
+    header: '#34495e', alt: '#ecf0f1', insight: '#e8f4f8',
+  };
+
+  const cardRows = (dispatchResult.cards || []).map(card => `
+    <div style="margin-bottom:24px;">
+      <div style="background:${C.blue};color:#fff;padding:10px 16px;font-weight:bold;font-size:15px;border-left:5px solid ${C.dark};">
+        ${card.title || `Card ${card.card_number}`}
+        ${card.subtitle ? `<span style="font-weight:normal;font-size:12px;opacity:0.85;margin-left:10px;">${card.subtitle}</span>` : ''}
+      </div>
+      <div style="padding:14px 16px;line-height:1.7;font-size:13px;background:#fff;border:1px solid #ddd;border-top:none;">
+        ${(card.body || '').replace(/\n\n/g,'</p><p style="margin:0 0 10px 0;">').replace(/\n/g,' ')}
+      </div>
+    </div>
+  `).join('');
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8">
 <style>
-  body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 20px; color: ${colors.primary_dark}; }
-  .report-title { background-color: ${colors.primary_dark}; color: white; padding: 25px; text-align: center; font-size: 32px; font-weight: bold; margin-bottom: 20px; }
-  .section-heading { background-color: ${colors.primary_blue}; color: white; padding: 12px 15px; font-size: 18px; font-weight: bold; margin-top: 25px; margin-bottom: 15px; border-left: 5px solid ${colors.primary_dark}; }
-  table { width: 100%; border-collapse: collapse; margin: 15px 0; }
-  th { background-color: ${colors.table_header}; color: white; padding: 12px; text-align: left; }
-  td { padding: 12px; border-bottom: 1px solid #ddd; }
-  tr:nth-child(even) { background-color: ${colors.table_alt_row}; }
-  .number { background-color: ${colors.accent_gold}; color: white; padding: 2px 6px; border-radius: 3px; font-weight: bold; }
+  body { font-family:'Segoe UI',sans-serif; margin:0; padding:20px; color:${C.dark}; font-size:14px; }
+  .cover { background:${C.dark};color:#fff;padding:30px;text-align:center;margin-bottom:20px; }
+  .cover h1 { margin:0 0 8px 0; font-size:26px; }
+  .footer { text-align:center;color:#999;font-size:11px;margin-top:30px;padding-top:15px;border-top:1px solid #ddd; }
 </style>
 </head>
 <body>
-<div class="report-title">✨ Numerology Reading for ${profile.name} ✨</div>
-<p><strong>Date of Birth:</strong> ${profile.dob_fmt}</p>
-
-<div class="section-heading">Core Numbers</div>
-<table>
-  <tr><th>Number Type</th><th>Value</th><th>Meaning</th></tr>
-  <tr><td>Psychic Number</td><td><span class="number">${profile.psychic_number}</span></td><td>Innate nature and character</td></tr>
-  <tr><td>Destiny Number</td><td><span class="number">${profile.destiny_number}</span></td><td>Life purpose and direction</td></tr>
-  <tr><td>Name Number</td><td><span class="number">${profile.name_number}</span></td><td>Expression and communication</td></tr>
-  <tr><td>Life Path Number</td><td><span class="number">${profile.life_path_number}</span></td><td>Soul's journey</td></tr>
-  <tr><td>Soul Urge Number</td><td><span class="number">${profile.soul_urge_number}</span></td><td>Heart's desire</td></tr>
-</table>
-
-<div class="section-heading">Your Numerology</div>
-<p>This reading is based on the Chaldean Numerology system and provides insights into your personality, life path, and inner motivations. The numbers above represent key aspects of your numerological profile.</p>
-
-<p><em>Report generated on ${new Date().toLocaleDateString()} at ${new Date().toLocaleTimeString()}</em></p>
+<div class="cover">
+  <h1>✨ Numerology Reading for ${name} ✨</h1>
+  <p>Date of Birth: ${profile.dob_fmt || profile.dob_used || ''} &nbsp;|&nbsp; Chaldean System</p>
+</div>
+${cardRows}
+<div class="footer">
+  Generated by NumeroSoul &nbsp;·&nbsp;
+  ${new Date().toLocaleDateString('en-IN',{day:'numeric',month:'long',year:'numeric'})}
+</div>
 </body>
-</html>
-  `;
+</html>`;
+}
+
+// ────────────────────────────────────────────────────────────
+// Emergency fallback — minimal table if everything else fails
+// ────────────────────────────────────────────────────────────
+function buildFallbackHTML(profile) {
+  const name = profile.name_used || profile.name || 'Client';
+  return `<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8">
+<style>
+  body { font-family:'Segoe UI',sans-serif; margin:20px; color:#2c3e50; }
+  h1   { background:#2c3e50; color:#fff; padding:20px; text-align:center; }
+  table{ width:100%; border-collapse:collapse; margin:15px 0; }
+  th   { background:#34495e; color:#fff; padding:10px; text-align:left; }
+  td   { padding:10px; border-bottom:1px solid #ddd; }
+  tr:nth-child(even) td { background:#ecf0f1; }
+  .num { background:#f39c12; color:#fff; padding:2px 8px; border-radius:3px; font-weight:bold; }
+</style>
+</head>
+<body>
+<h1>✨ Numerology Reading for ${name} ✨</h1>
+<p><strong>Date of Birth:</strong> ${profile.dob_fmt || profile.dob_used || ''}</p>
+<table>
+  <tr><th>Number Type</th><th>Value</th></tr>
+  <tr><td>Psychic</td>     <td><span class="num">${profile.psychic_number || '—'}</span></td></tr>
+  <tr><td>Destiny</td>     <td><span class="num">${profile.destiny_number || '—'}</span></td></tr>
+  <tr><td>Name</td>        <td><span class="num">${profile.name_number || '—'}</span></td></tr>
+  <tr><td>Soul Urge</td>   <td><span class="num">${profile.soul_urge_number || '—'}</span></td></tr>
+  <tr><td>Personality</td> <td><span class="num">${profile.personality_number || '—'}</span></td></tr>
+  <tr><td>Life Path</td>   <td><span class="num">${profile.life_path_number || profile.destiny_number || '—'}</span></td></tr>
+  <tr><td>Maturity</td>    <td><span class="num">${profile.maturity_number || '—'}</span></td></tr>
+  <tr><td>Power</td>       <td><span class="num">${profile.power_number || '—'}</span></td></tr>
+  <tr><td>Personal Year</td><td><span class="num">${profile.personal_year_number || '—'}</span></td></tr>
+</table>
+<p style="color:#999;font-size:12px;text-align:center;">
+  Generated by NumeroSoul · ${new Date().toLocaleDateString('en-IN',{day:'numeric',month:'long',year:'numeric'})}
+</p>
+</body>
+</html>`;
 }
 
 module.exports = { handlePaidReading };

@@ -1,13 +1,11 @@
 // ============================================================
-//  src/engines/hardcoded.js  v3
-//  11 cards (Master Number) + 1 CTA = 12 total dots
+//  src/engines/hardcoded.js  v4
 //
-//  Key changes from v2:
-//    - No accent circles — inline personalised text instead
-//    - Card 1 = curiosity hook about 90+ numbers
-//    - Cards 2-10 = deep Chaldean reading
-//    - Card 11 = FOMO card naming unrevealed numbers
-//    - CTA = single Full Reading product
+//  CHANGES from v3:
+//    - run(service, profile) removed
+//    - runFreeReading(profile) — returns card JSON for frontend
+//    - runPaidReading(profile) — returns HTML string for DOCX
+//    - All lookup tables and buildCards() logic unchanged
 // ============================================================
 
 const PSYCHIC = {
@@ -122,8 +120,9 @@ const KARMIC_DEBT_TEXT = {
 };
 
 // ─────────────────────────────────────────────────────────────
-function buildCards(profile) {
-
+//  Shared data extraction helper
+// ─────────────────────────────────────────────────────────────
+function extractFields(profile) {
   const {
     name_used, dob_fmt,
     psychic_number, psychic_compound,
@@ -168,6 +167,78 @@ function buildCards(profile) {
   const pyEntry        = PERSONAL_YEAR[personal_year_number] || { label:`Year ${personal_year_number}`, tip:'' };
   const currentYear    = new Date().getFullYear();
   const pdSame         = psychic_number === destiny_number;
+
+  return {
+    name_used, dob_fmt,
+    psychic_number, psychic_compound,
+    destiny_number, destiny_compound,
+    name_number, name_compound,
+    soul_urge_number, soul_urge_compound,
+    personality_number, personality_compound,
+    maturity_number, maturity_compound,
+    power_number, power_compound,
+    ruling_planet, pd_combination,
+    personal_year_number,
+    current_pinnacle, current_challenge,
+    pinnacle_1, pinnacle_1_end_age,
+    pinnacle_2, pinnacle_2_end_age,
+    pinnacle_3, pinnacle_4,
+    challenge_1, challenge_2, challenge_3, challenge_4,
+    cornerstone, capstone, first_vowel,
+    cornerstone_value, capstone_value, first_vowel_value,
+    hidden_passions, karmic_lessons, missing_numbers, subconscious_self,
+    has_karmic_debt, karmic_debt_numbers, karmic_debt_locations,
+    has_master_11, has_master_22, has_master_33, master_numbers_found,
+    dominant_plane,
+    plane_mental_count, plane_physical_count,
+    plane_emotional_count, plane_intuitive_count,
+    soul_expression_bridge, life_personality_bridge,
+    rational_thought_number, balance_number, essence_number,
+    physical_transit, mental_transit, spiritual_transit,
+    physical_transit_value, mental_transit_value, spiritual_transit_value,
+    current_life_period, life_period_2_end_age,
+    universal_year_number,
+    // derived
+    firstName, masterList, hasMaster,
+    karmicDebtList, hasKarmic,
+    missingList, hiddenList, lessonList,
+    pyEntry, currentYear, pdSame,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────
+//  FREE READING — returns card JSON for frontend display
+// ─────────────────────────────────────────────────────────────
+function buildCards(profile) {
+  const f = extractFields(profile);
+  const {
+    firstName, masterList, hasMaster, karmicDebtList, hasKarmic,
+    hiddenList, lessonList, pyEntry, currentYear, pdSame,
+    psychic_number, psychic_compound, ruling_planet,
+    destiny_number, destiny_compound,
+    name_number, name_compound,
+    soul_urge_number, soul_urge_compound,
+    personality_number, personality_compound,
+    maturity_number, maturity_compound,
+    power_number, power_compound,
+    pd_combination,
+    personal_year_number,
+    current_pinnacle, current_challenge,
+    pinnacle_1, pinnacle_1_end_age,
+    pinnacle_2, pinnacle_2_end_age,
+    pinnacle_3, pinnacle_4,
+    cornerstone, capstone, first_vowel,
+    cornerstone_value, capstone_value, first_vowel_value,
+    subconscious_self,
+    has_karmic_debt, karmic_debt_locations,
+    dominant_plane,
+    plane_mental_count, plane_physical_count,
+    plane_emotional_count, plane_intuitive_count,
+    soul_expression_bridge, life_personality_bridge,
+    rational_thought_number, balance_number, essence_number,
+    physical_transit, mental_transit, spiritual_transit,
+    physical_transit_value, mental_transit_value, spiritual_transit_value,
+  } = f;
 
   // ── CARD 1 — Curiosity Hook ─────────────────────────────
   let c1 = `Most people think numerology is just two numbers — your birth date and your name. ${firstName}, your complete Chaldean chart contains over 90 distinct numbers, each measuring a different dimension of who you are.\n\n`;
@@ -219,7 +290,7 @@ function buildCards(profile) {
   }
   if (capstone) {
     c6 += `Your Capstone is ${capstone} (value ${capstone_value||'?'}) — the last letter, revealing how you complete things and close chapters. `;
-    const capMap = { D:'Value 4 — Rahu energy. You finish with structure and thoroughness. You are a completer.', A:'Value 1 — Sun energy. You finish with confidence and decisiveness.', D:'Value 4 — you finish with practical, enduring groundedness.', N:'Value 5 — Mercury energy. You finish by moving on and beginning the next thing.', R:'Value 2 — Moon energy. You close things gently and relationally.' };
+    const capMap = { D:'Value 4 — Rahu energy. You finish with structure and thoroughness. You are a completer.', A:'Value 1 — Sun energy. You finish with confidence and decisiveness.', N:'Value 5 — Mercury energy. You finish by moving on and beginning the next thing.', R:'Value 2 — Moon energy. You close things gently and relationally.' };
     c6 += (capMap[capstone] || `Value ${capstone_value||'?'} shapes how you finish.`) + '\n\n';
   }
   if (first_vowel) {
@@ -333,8 +404,302 @@ function buildCards(profile) {
   };
 }
 
-function run(service, profile) {
-  return buildCards(profile);
+// ─────────────────────────────────────────────────────────────
+//  PAID READING — returns HTML string for DOCX conversion
+// ─────────────────────────────────────────────────────────────
+function buildPaidReadingHTML(profile) {
+  const f = extractFields(profile);
+  const {
+    firstName, hasMaster, masterList, hasKarmic, karmicDebtList,
+    hiddenList, lessonList, pyEntry, currentYear,
+    dob_fmt,
+    psychic_number, psychic_compound, ruling_planet,
+    destiny_number, destiny_compound,
+    name_number, soul_urge_number, soul_urge_compound,
+    personality_number,
+    maturity_number, maturity_compound,
+    power_number, power_compound,
+    life_path_number,
+    personal_year_number, personal_month_number,
+    current_pinnacle, current_challenge,
+    pinnacle_1, pinnacle_1_end_age,
+    pinnacle_2, pinnacle_2_end_age,
+    pinnacle_3, pinnacle_3_end_age,
+    pinnacle_4,
+    challenge_1, challenge_2, challenge_3, challenge_4,
+    cornerstone, capstone, first_vowel,
+    cornerstone_value, capstone_value, first_vowel_value,
+    subconscious_self, essence_number,
+    has_karmic_debt, karmic_debt_locations,
+    dominant_plane,
+    plane_mental_count, plane_physical_count,
+    plane_emotional_count, plane_intuitive_count,
+    soul_expression_bridge, life_personality_bridge,
+    rational_thought_number, balance_number,
+    physical_transit, mental_transit, spiritual_transit,
+    physical_transit_value, mental_transit_value, spiritual_transit_value,
+    has_master_11, has_master_22, has_master_33,
+    missing_numbers,
+  } = f;
+
+  // Colour palette
+  const C = {
+    dark:    '#2c3e50',
+    blue:    '#3498db',
+    gold:    '#f39c12',
+    header:  '#34495e',
+    alt:     '#ecf0f1',
+    insight: '#e8f4f8',
+    white:   '#ffffff',
+  };
+
+  // Reuse prose generators from the lookup tables
+  const pEntry  = PSYCHIC[psychic_number]  || {};
+  const dEntry  = DESTINY[destiny_number]  || {};
+  const psychicProse  = pEntry.text  ? pEntry.text(firstName, psychic_number, ruling_planet, psychic_compound)  : `Psychic Number ${psychic_number}, ruled by ${ruling_planet||'your planet'}.`;
+  const destinyProse  = dEntry.text  ? dEntry.text(firstName, destiny_number, destiny_compound)                 : `Destiny Number ${destiny_number}.`;
+
+  const suKey   = soul_urge_compound && [13,14,16,19].includes(soul_urge_compound) ? soul_urge_compound : soul_urge_number;
+  const suDesc  = SOUL_URGE_DESC[suKey]        || `driven by a deep inner hunger`;
+  const persDesc= PERSONALITY_DESC[personality_number] || `carries the energy of ${personality_number}`;
+  const pyTip   = pyEntry.tip || '';
+
+  const masterMentions = [has_master_11&&'11', has_master_22&&'22', has_master_33&&'33'].filter(Boolean);
+  const karmicText = hasKarmic ? (KARMIC_DEBT_TEXT[karmicDebtList[0]] || '') : '';
+
+  const totalLetters = (plane_mental_count||0)+(plane_physical_count||0)+(plane_emotional_count||0)+(plane_intuitive_count||0);
+  const pct = (n) => totalLetters ? Math.round((n||0)/totalLetters*100) : 0;
+
+  // Helper to convert newlines in prose to <p> tags
+  const prose = (text) => text
+    .split('\n\n')
+    .filter(s => s.trim())
+    .map(s => `<p style="margin:0 0 12px 0;line-height:1.7;">${s.replace(/\n/g,' ')}</p>`)
+    .join('');
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<style>
+  * { box-sizing: border-box; }
+  body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    margin: 0; padding: 20px;
+    color: ${C.dark}; font-size: 14px;
+  }
+  .cover {
+    background: ${C.dark}; color: ${C.white};
+    padding: 35px 30px; text-align: center;
+    margin-bottom: 0;
+  }
+  .cover h1 { margin: 0 0 8px 0; font-size: 28px; letter-spacing: 1px; }
+  .cover p  { margin: 4px 0; font-size: 15px; opacity: 0.85; }
+  .subtitle-bar {
+    background: ${C.blue}; color: ${C.white};
+    padding: 10px 30px; text-align: center;
+    font-size: 14px; margin-bottom: 25px;
+  }
+  .section {
+    background: ${C.blue}; color: ${C.white};
+    padding: 10px 16px; font-size: 17px; font-weight: bold;
+    margin: 28px 0 14px 0;
+    border-left: 5px solid ${C.dark};
+  }
+  .subsection {
+    font-size: 15px; font-weight: bold; color: ${C.dark};
+    border-bottom: 2px solid ${C.blue};
+    margin: 20px 0 8px 0; padding-bottom: 4px;
+  }
+  table { width: 100%; border-collapse: collapse; margin: 10px 0 20px 0; }
+  th {
+    background: ${C.header}; color: ${C.white};
+    padding: 10px 12px; text-align: left; font-size: 13px;
+  }
+  td { padding: 10px 12px; border-bottom: 1px solid #ddd; font-size: 13px; }
+  tr:nth-child(even) td { background: ${C.alt}; }
+  .num {
+    background: ${C.gold}; color: ${C.white};
+    padding: 2px 8px; border-radius: 3px;
+    font-weight: bold; font-size: 13px;
+  }
+  .insight {
+    background: ${C.insight};
+    border-left: 4px solid ${C.blue};
+    padding: 14px 16px; margin: 12px 0 20px 0;
+    font-size: 13px; line-height: 1.7;
+  }
+  .prose { font-size: 13px; line-height: 1.7; margin-bottom: 16px; }
+  .two-col { display: table; width: 100%; margin-bottom: 20px; }
+  .col { display: table-cell; width: 50%; vertical-align: top; padding-right: 12px; }
+  .col:last-child { padding-right: 0; padding-left: 12px; }
+  .footer {
+    text-align: center; color: #999; font-size: 11px;
+    margin-top: 35px; padding-top: 15px;
+    border-top: 1px solid #ddd;
+  }
+  .badge {
+    display: inline-block;
+    background: ${C.gold}; color: ${C.white};
+    font-size: 11px; font-weight: bold;
+    padding: 2px 8px; border-radius: 10px;
+    margin-left: 6px; vertical-align: middle;
+  }
+</style>
+</head>
+<body>
+
+<!-- ── COVER ── -->
+<div class="cover">
+  <h1>✨ Complete Numerology Reading</h1>
+  <p><strong>${f.name_used || firstName}</strong></p>
+  <p>Date of Birth: ${dob_fmt || profile.dob_used || ''}</p>
+  ${hasMaster ? `<p>⭐ Master Number ${masterList[0]} detected in chart</p>` : ''}
+</div>
+<div class="subtitle-bar">
+  Ruling Planet: ${ruling_planet || '—'} &nbsp;|&nbsp;
+  PD Combination: ${f.pd_combination || `${psychic_number}-${destiny_number}`} &nbsp;|&nbsp;
+  Chaldean System
+</div>
+
+<!-- ── SECTION 1: CORE NUMBERS ── -->
+<div class="section">🔢 Section 1 — Core Numbers</div>
+<table>
+  <tr>
+    <th>Number</th><th>Type</th><th>Compound</th><th>Label</th>
+  </tr>
+  <tr><td>Psychic</td>     <td><span class="num">${psychic_number}</span></td>   <td>${psychic_compound || '—'}</td>  <td>${PSYCHIC[psychic_number]?.label || '—'} · ${ruling_planet || '—'}</td></tr>
+  <tr><td>Destiny</td>     <td><span class="num">${destiny_number}</span></td>   <td>${destiny_compound || '—'}</td>  <td>${DESTINY[destiny_number]?.label || '—'}</td></tr>
+  <tr><td>Name</td>        <td><span class="num">${name_number}</span></td>      <td>${f.name_compound || '—'}</td>   <td>${NAME_LABEL[name_number] || '—'}</td></tr>
+  <tr><td>Soul Urge</td>   <td><span class="num">${soul_urge_number}</span></td> <td>${soul_urge_compound || '—'}</td><td>Inner motivation</td></tr>
+  <tr><td>Personality</td> <td><span class="num">${personality_number}</span></td><td>${f.personality_compound || '—'}</td><td>Outer expression</td></tr>
+  <tr><td>Life Path</td>   <td><span class="num">${life_path_number || destiny_number}</span></td><td>—</td><td>Soul's journey</td></tr>
+  <tr><td>Maturity</td>    <td><span class="num">${maturity_number}</span></td>  <td>${maturity_compound || '—'}</td><td>${MATURITY_LABEL[maturity_number] || '—'}</td></tr>
+  <tr><td>Power</td>       <td><span class="num">${power_number}</span></td>     <td>${power_compound || '—'}</td>   <td>Highest potential</td></tr>
+</table>
+
+<!-- ── PSYCHIC INTERPRETATION ── -->
+<div class="subsection">Psychic Number ${psychic_number} — ${PSYCHIC[psychic_number]?.label || ''}</div>
+<div class="prose">${prose(psychicProse)}</div>
+
+<!-- ── DESTINY INTERPRETATION ── -->
+<div class="subsection">Destiny Number ${destiny_number} — ${DESTINY[destiny_number]?.label || ''}</div>
+<div class="prose">${prose(destinyProse)}</div>
+
+<!-- ── NAME + SOUL URGE ── -->
+<div class="subsection">Name Number ${name_number} & Soul Urge ${soul_urge_number}</div>
+<div class="insight">
+  <strong>Name Number ${name_number}</strong> — ${NAME_LABEL[name_number] || ''}. This is what your daily-use name projects outward: the talent the world sees before you have explained yourself.<br><br>
+  <strong>Soul Urge ${soul_urge_number}</strong> — At your core you are ${suDesc}.
+</div>
+
+<!-- ── PERSONALITY ── -->
+<div class="subsection">Personality Number ${personality_number}</div>
+<div class="insight">
+  To the world you appear <strong>${persDesc}</strong>. Your Psychic Number ${psychic_number} is who you are privately. Your Personality Number ${personality_number} is who the world experiences first.
+</div>
+
+<!-- ── SECTION 2: NAME ANALYSIS ── -->
+<div class="section">🔤 Section 2 — Name Analysis</div>
+<table>
+  <tr><th>Element</th><th>Letter</th><th>Value</th><th>Significance</th></tr>
+  <tr><td>Cornerstone (first letter)</td><td><span class="num">${cornerstone || '—'}</span></td><td>${cornerstone_value || '—'}</td><td>How you initiate and begin things</td></tr>
+  <tr><td>Capstone (last letter)</td>    <td><span class="num">${capstone || '—'}</span></td>   <td>${capstone_value || '—'}</td>  <td>How you complete and close things</td></tr>
+  <tr><td>First Vowel</td>               <td><span class="num">${first_vowel || '—'}</span></td><td>${first_vowel_value || '—'}</td><td>Instinctive emotional response</td></tr>
+  <tr><td>Subconscious Self</td>         <td>—</td><td><span class="num">${subconscious_self || '—'}</span></td><td>Resourcefulness under pressure (scale 1–8)</td></tr>
+</table>
+
+<!-- ── SECTION 3: PLANES OF EXPRESSION ── -->
+<div class="section">🌊 Section 3 — Planes of Expression</div>
+<table>
+  <tr><th>Plane</th><th>Letter Count</th><th>Percentage</th></tr>
+  <tr><td>Mental</td>    <td>${plane_mental_count || 0}</td>    <td>${pct(plane_mental_count)}%</td></tr>
+  <tr><td>Physical</td>  <td>${plane_physical_count || 0}</td>  <td>${pct(plane_physical_count)}%</td></tr>
+  <tr><td>Emotional</td> <td>${plane_emotional_count || 0}</td> <td>${pct(plane_emotional_count)}%</td></tr>
+  <tr><td>Intuitive</td> <td>${plane_intuitive_count || 0}</td> <td>${pct(plane_intuitive_count)}%</td></tr>
+</table>
+<div class="insight"><strong>Dominant Plane: ${(dominant_plane||'').charAt(0).toUpperCase()+(dominant_plane||'').slice(1)}</strong> — This is the primary mode through which you process the world.</div>
+
+<!-- ── SECTION 4: HIDDEN PATTERNS ── -->
+<div class="section">⚡ Section 4 — Hidden Patterns</div>
+<div class="insight">
+  <strong>Hidden Passions:</strong> ${hiddenList.length ? hiddenList.join(', ') : 'None — balanced name energy'}<br><br>
+  <strong>Missing Numbers (Karmic Lessons):</strong> ${Array.isArray(missing_numbers) && missing_numbers.length ? missing_numbers.join(', ') : 'None — complete name'}<br><br>
+  <strong>Karmic Debt:</strong> ${hasKarmic ? `Yes — compound ${karmicDebtList.join(', ')}` : 'No karmic debt numbers found'}<br><br>
+  <strong>Master Numbers:</strong> ${masterMentions.length ? masterMentions.join(', ') : 'None detected'}
+</div>
+${hasKarmic && karmicText ? `<div class="prose">${prose(karmicText)}</div>` : ''}
+
+<!-- ── SECTION 5: LIFE CYCLES & TIMING ── -->
+<div class="section">📅 Section 5 — Life Cycles &amp; Timing</div>
+
+<div class="subsection">Personal Year &amp; Month</div>
+<table>
+  <tr><th>Cycle</th><th>Number</th><th>Theme</th></tr>
+  <tr><td>Personal Year ${currentYear}</td> <td><span class="num">${personal_year_number}</span></td><td>${PERSONAL_YEAR[personal_year_number]?.label || '—'}</td></tr>
+  <tr><td>Personal Month</td>               <td><span class="num">${personal_month_number || '—'}</span></td><td>Monthly energy</td></tr>
+</table>
+<div class="insight"><strong>Personal Year ${personal_year_number} Guidance:</strong> ${pyTip}</div>
+
+<div class="subsection">Pinnacles</div>
+<table>
+  <tr><th>Pinnacle</th><th>Number</th><th>End Age</th></tr>
+  <tr><td>Pinnacle 1</td><td><span class="num">${pinnacle_1 || '—'}</span></td><td>${pinnacle_1_end_age || '—'}</td></tr>
+  <tr><td>Pinnacle 2</td><td><span class="num">${pinnacle_2 || '—'}</span></td><td>${pinnacle_2_end_age || '—'}</td></tr>
+  <tr><td>Pinnacle 3</td><td><span class="num">${pinnacle_3 || '—'}</span></td><td>${f.pinnacle_3_end_age || '—'}</td></tr>
+  <tr><td>Pinnacle 4</td><td><span class="num">${pinnacle_4 || '—'}</span></td><td>Life</td></tr>
+  <tr style="background:#fff3cd;"><td><strong>Current Pinnacle</strong></td><td><span class="num">${current_pinnacle}</span></td><td>Active now</td></tr>
+</table>
+
+<div class="subsection">Challenges</div>
+<table>
+  <tr><th>Challenge</th><th>Number</th></tr>
+  <tr><td>Challenge 1</td><td><span class="num">${challenge_1 || '—'}</span></td></tr>
+  <tr><td>Challenge 2</td><td><span class="num">${challenge_2 || '—'}</span></td></tr>
+  <tr><td>Challenge 3</td><td><span class="num">${challenge_3 || '—'}</span></td></tr>
+  <tr><td>Challenge 4</td><td><span class="num">${challenge_4 || '—'}</span></td></tr>
+  <tr style="background:#fff3cd;"><td><strong>Current Challenge</strong></td><td><span class="num">${current_challenge}</span></td></tr>
+</table>
+
+<!-- ── SECTION 6: TRANSITS & ESSENCE ── -->
+<div class="section">🔄 Section 6 — Letter Transits &amp; Essence</div>
+<table>
+  <tr><th>Transit</th><th>Letter</th><th>Value</th></tr>
+  <tr><td>Physical Transit</td> <td>${physical_transit || '—'}</td> <td>${physical_transit_value || '—'}</td></tr>
+  <tr><td>Mental Transit</td>   <td>${mental_transit || '—'}</td>   <td>${mental_transit_value || '—'}</td></tr>
+  <tr><td>Spiritual Transit</td><td>${spiritual_transit || '—'}</td><td>${spiritual_transit_value || '—'}</td></tr>
+</table>
+<div class="insight">
+  <strong>Essence Number: <span class="num">${essence_number || '—'}</span></strong> — The overarching karmic theme of your current life period (sum of all three transit values).
+</div>
+
+<!-- ── SECTION 7: BRIDGE & ADDITIONAL NUMBERS ── -->
+<div class="section">🌉 Section 7 — Bridge &amp; Additional Numbers</div>
+<table>
+  <tr><th>Number</th><th>Value</th><th>Meaning</th></tr>
+  <tr><td>Soul–Expression Bridge</td>   <td><span class="num">${soul_expression_bridge ?? '—'}</span></td><td>Gap between Soul Urge and Name expression</td></tr>
+  <tr><td>Life–Personality Bridge</td>  <td><span class="num">${life_personality_bridge ?? '—'}</span></td><td>Gap between Destiny and Personality</td></tr>
+  <tr><td>Rational Thought Number</td>  <td><span class="num">${rational_thought_number ?? '—'}</span></td><td>How you think and process information</td></tr>
+  <tr><td>Balance Number</td>           <td><span class="num">${balance_number ?? '—'}</span></td><td>How you restore equilibrium under stress</td></tr>
+</table>
+
+<div class="footer">
+  Generated by NumeroSoul &nbsp;·&nbsp;
+  ${new Date().toLocaleDateString('en-IN', { day:'numeric', month:'long', year:'numeric' })} &nbsp;·&nbsp;
+  Chaldean Numerology System
+</div>
+
+</body>
+</html>`;
 }
 
-module.exports = { run };
+// ─────────────────────────────────────────────────────────────
+//  Exports
+// ─────────────────────────────────────────────────────────────
+module.exports = {
+  // Free reading — card JSON for frontend
+  runFreeReading:  (profile) => buildCards(profile),
+
+  // Paid reading — HTML string for DOCX conversion
+  runPaidReading:  (profile) => buildPaidReadingHTML(profile),
+};

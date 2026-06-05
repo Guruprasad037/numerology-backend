@@ -1,17 +1,15 @@
 // ============================================================
-//  src/engines/dispatcher.js
-//  v2 — tags result with _engine_config and _engine_used
+//  src/engines/dispatcher.js  v3
 //
-//  CHANGE from v1:
-//    - After running an engine (or falling back), attaches two
-//      metadata fields to the result object:
-//        result._engine_config = what reading.settings.js requested
-//        result._engine_used   = what actually ran and produced content
-//    - free-reading.js reads these tags and passes both to saveReading()
-//    - This fixes the bug where fallback readings were labelled "claude"
+//  CHANGES from v2:
+//    - Reads FREE_READING_ENGINE / PAID_READING_ENGINE from settings
+//      instead of defaultEngine / engineOverrides
+//    - Calls hardcoded.runFreeReading() or hardcoded.runPaidReading()
+//      depending on service type — no more generic run(service, profile)
+//    - tagResult() unchanged — still attaches _engine_config/_engine_used
 // ============================================================
 
-const path    = require('path');
+const path     = require('path');
 const settings = require('../reading.settings');
 
 const FILE = 'dispatcher';
@@ -24,101 +22,99 @@ function log(msg, data) {
   }
 }
 
-// Cache loaded engines
+// ── Engine cache ─────────────────────────────────────────────
 const engineCache = {};
 
 function loadEngine(name) {
-  log(`loadEngine called with name: "${name}"`);
+  log(`loadEngine: "${name}"`);
   if (engineCache[name]) return engineCache[name];
-  try {
-    const engine = require(path.join(__dirname, `${name}.js`));
-    engineCache[name] = engine;
-    log(`engine "${name}" loaded and cached`);
-    return engine;
-  } catch (err) {
-    log(`failed to load engine "${name}": ${err.message}`);
-    throw err;
-  }
+  const engine = require(path.join(__dirname, `${name}.js`));
+  engineCache[name] = engine;
+  return engine;
 }
 
+// ── Prompt loader ────────────────────────────────────────────
 function loadPrompt(service, version) {
   const promptFile = `${service}_${version}.js`;
-  log(`loading prompt file: ${promptFile}`);
-  try {
-    const buildPrompt = require(path.join(__dirname, '../prompts', promptFile));
-    log(`prompt file loaded successfully: ${promptFile}`);
-    return buildPrompt;
-  } catch (err) {
-    log(`failed to load prompt file "${promptFile}": ${err.message}`);
-    throw err;
-  }
+  log(`loadPrompt: "${promptFile}"`);
+  return require(path.join(__dirname, '../prompts', promptFile));
 }
 
 // ── Tag helper ───────────────────────────────────────────────
-// Attaches _engine_config and _engine_used to the result.
-// These are internal metadata fields — prefixed with _ so they
-// are clearly not numerology data. They are read by free-reading.js
-// and passed to saveReading() for accurate DB recording.
+// Attaches metadata so callers know what actually ran.
+// _engine_config = what was configured
+// _engine_used   = what actually ran (may differ if fallback fired)
 function tagResult(result, engineConfig, engineUsed) {
   if (result && typeof result === 'object') {
     result._engine_config = engineConfig;
     result._engine_used   = engineUsed;
   }
+  // If result is a plain string (HTML from hardcoded paid reading),
+  // wrap it so tags can still be attached and callers get a consistent object.
+  if (typeof result === 'string') {
+    return {
+      _html:         result,       // paid-reading.js reads this
+      _engine_config: engineConfig,
+      _engine_used:   engineUsed,
+    };
+  }
   return result;
 }
 
 // ── Main dispatch ────────────────────────────────────────────
-async function dispatch(service, profile) {
-  log(`dispatch called — service: "${service}", profile: `, profile);
+async function dispatch(serviceType, profile) {
+  log(`dispatch — serviceType: "${serviceType}"`);
 
-  const { engine: engineConfig, promptVersion } = settings.resolveSettings(service);
-  log(`resolved engine: "${engineConfig}", prompt version: "${promptVersion}"`);
+  const { engine: engineConfig, promptVersion } = settings.resolveSettings(serviceType);
+  const isFree = serviceType === 'free_reading';
 
-  // ── Try the configured engine ────────────────────────────
-  if (engineConfig !== 'hardcoded') {
+  log(`resolved: engine="${engineConfig}" promptVersion="${promptVersion}" isFree=${isFree}`);
+
+  // ── Hardcoded engine ─────────────────────────────────────
+  if (engineConfig === 'hardcoded') {
     try {
-      log(`loading engine: "${engineConfig}"`);
-      const engine = loadEngine(engineConfig);
-
-      // Build prompt for AI engines
-      const buildPrompt = loadPrompt(service, promptVersion);
-      const prompt = buildPrompt(profile);
-      log(`prompt built for service: "${service}": ${prompt.slice(0, 300)}`);
-
-      log(`running engine: "${engineConfig}"`);
-      const result = await engine.run(prompt);
-
-      // ✓ Success — tag with actual engine used
-      log(`engine "${engineConfig}" succeeded`);
-      return tagResult(result, engineConfig, engineConfig);
-
+      const hardcoded = loadEngine('hardcoded');
+      const result = isFree
+        ? hardcoded.runFreeReading(profile)
+        : hardcoded.runPaidReading(profile);
+      log(`hardcoded engine ran as configured (${isFree ? 'free' : 'paid'})`);
+      return tagResult(result, 'hardcoded', 'hardcoded');
     } catch (err) {
-      // ✗ Failed — log and fall through to fallback
-      log(
-        `${engineConfig} failed — falling back to hardcoded. ${err.message}`
-      );
+      log(`hardcoded engine failed: ${err.message}`);
+      throw err;
     }
   }
 
-  // ── Fallback: hardcoded engine ───────────────────────────
+  // ── AI engine (claude / openai) ──────────────────────────
   try {
-    log(`loading engine: "hardcoded"`);
-    const hardcoded = loadEngine('hardcoded');
+    log(`loading AI engine: "${engineConfig}"`);
+    const engine = loadEngine(engineConfig);
 
-    log(`running engine: "hardcoded"`);
-    const result = hardcoded.run(service, profile);
+    // For paid readings, the prompt file is keyed as 'paid_reading'
+    const promptKey = isFree ? serviceType : 'paid_reading';
+    const buildPrompt = loadPrompt(promptKey, promptVersion);
+    const prompt = buildPrompt(profile);
+    log(`prompt built for "${promptKey}", length=${prompt.length}`);
 
-    // Tag: config = what was requested, used = hardcoded (fallback)
-    log(
-      engineConfig === 'hardcoded'
-        ? `hardcoded engine ran as configured`
-        : `hardcoded fallback succeeded — engine_config="${engineConfig}", engine_used="hardcoded"`
-    );
-    return tagResult(result, engineConfig, 'hardcoded');
+    const result = await engine.run(prompt);
+    log(`AI engine "${engineConfig}" succeeded`);
+    return tagResult(result, engineConfig, engineConfig);
 
-  } catch (fallbackErr) {
-    log(`hardcoded fallback also failed: ${fallbackErr.message}`);
-    throw fallbackErr;
+  } catch (err) {
+    // AI failed — fall back to hardcoded
+    log(`AI engine "${engineConfig}" failed — falling back to hardcoded. ${err.message}`);
+
+    try {
+      const hardcoded = loadEngine('hardcoded');
+      const result = isFree
+        ? hardcoded.runFreeReading(profile)
+        : hardcoded.runPaidReading(profile);
+      log(`hardcoded fallback succeeded — engine_config="${engineConfig}" engine_used="hardcoded"`);
+      return tagResult(result, engineConfig, 'hardcoded');
+    } catch (fallbackErr) {
+      log(`hardcoded fallback also failed: ${fallbackErr.message}`);
+      throw fallbackErr;
+    }
   }
 }
 

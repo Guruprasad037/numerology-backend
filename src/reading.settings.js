@@ -1,109 +1,75 @@
 // ============================================================
-//  src/reading.settings.js
-//  v3 — Added PAID_REPORT_DELIVERY_MODE
+//  src/reading.settings.js  v4
 //
-//  CHANGE from v2:
-//    - Added PAID_REPORT_DELIVERY_MODE (1=manual, 2=auto-claude)
-//    - Added paidReadingEngine and promptVersion for paid flows
-//    - Added color palette ref for Claude to use in HTML
+//  Two knobs only:
+//    FREE_READING_ENGINE  — engine for free readings
+//    PAID_READING_ENGINE  — engine for paid readings
+//
+//  Both accept: "claude" | "hardcoded"
+//
+//  Any combination is valid:
+//    free_reading=hardcoded + paid_reading=hardcoded  → zero API cost
+//    free_reading=hardcoded + paid_reading=claude     → API cost only on paid
+//    free_reading=claude    + paid_reading=claude     → full AI on both
 // ============================================================
 
-const FILE = "src/reading.settings.js";
+const FILE = 'src/reading.settings.js';
 
-function log(step, message, data) {
-  const timestamp = new Date().toISOString();
-  const border = "═".repeat(60);
-  console.log(`\n${border}`);
-  console.log(`  🔧 [${FILE}]`);
-  console.log(`  📍 STEP ${step}  |  ${message}`);
-  console.log(`  🕐 ${timestamp}`);
-  if (data) {
-    console.log(`  📦 Data: ${JSON.stringify(data, null, 2)}`);
-  }
-  console.log(`${border}\n`);
-}
-
-function logResolved(result) {
-  const border = "★".repeat(60);
-  console.log(`\n${border}`);
-  console.log(`  ✅ [${FILE}] RESOLVED SETTINGS`);
-  console.log(`  🔑 Service      : ${result.serviceName}`);
-  console.log(`  ⚙️  Engine       : ${result.engine}`);
-  console.log(`  📋 PromptVersion: ${result.promptVersion}`);
-  console.log(`${border}\n`);
-}
-
-log(1, "Module loaded");
+console.log(`[${FILE}] loaded`);
 
 // ────────────────────────────────────────────────────────────
-// CONFIGURATION
+// ENGINE CONFIGURATION
 // ────────────────────────────────────────────────────────────
-const config = {
-  // ── FREE READING ──────────────────────────────────────────
-  defaultEngine: "hardcoded",
-  fallbackEngine: "hardcoded",
-  engineOverrides: {
-    // free_reading: 'claude',  // Uncomment to use Claude for free readings
-  },
-  promptVersions: {
-    free_reading: "v1.0",
-    career: "v1.0",
-    love: "v1.0",
-    health: "v1.0",
-    blueprint: "v1.0",
-  },
+const FREE_READING_ENGINE = 'hardcoded';  // 'claude' or 'hardcoded'
+const PAID_READING_ENGINE = 'hardcoded';  // 'claude' or 'hardcoded'
 
-  // ── PAID READING ──────────────────────────────────────────
-  // MODE 1: Manual — no report generation, admin creates manually
-  // MODE 2: Auto — backend calls Claude to generate HTML → DOCX
-  PAID_REPORT_DELIVERY_MODE: 2,
-  paidReadingEngine: "claude",
-  paidReadingPromptVersion: "minimal_v1.0",
-
-  // ── COLOR PALETTE FOR REPORTS ─────────────────────────────
-  // Claude uses these colors when generating HTML
-  reportColors: {
-    primary_dark: "#2c3e50",      // Main heading background
-    primary_blue: "#3498db",      // Section headings
-    accent_gold: "#f39c12",       // Number highlights
-    text_dark: "#2c3e50",         // Body text
-    text_light: "#ecf0f1",        // Light backgrounds
-    table_header: "#34495e",      // Table header background
-    table_alt_row: "#ecf0f1",     // Alternating table rows
-    table_border: "#bdc3c7",      // Table borders
-    insight_bg: "#e8f4f8",        // Insight box background
-    insight_border: "#3498db",    // Insight box left border
-  },
+// Prompt versions — only used when engine = 'claude'
+const PROMPT_VERSIONS = {
+  free_reading: 'v1.0',
+  paid_reading: 'minimal_v1.0',
 };
 
-log(2, "Base config initialized", {
-  PAID_REPORT_DELIVERY_MODE: config.PAID_REPORT_DELIVERY_MODE,
-  paidReadingEngine: config.paidReadingEngine,
-  paidReadingPromptVersion: config.paidReadingPromptVersion,
-});
+console.log(`[${FILE}] FREE_READING_ENGINE="${FREE_READING_ENGINE}" PAID_READING_ENGINE="${PAID_READING_ENGINE}"`);
+
+// ────────────────────────────────────────────────────────────
+// COLOUR PALETTE
+// Used by Claude prompts and the hardcoded HTML generator
+// ────────────────────────────────────────────────────────────
+const REPORT_COLORS = {
+  primary_dark:  '#2c3e50',
+  primary_blue:  '#3498db',
+  accent_gold:   '#f39c12',
+  text_dark:     '#2c3e50',
+  text_light:    '#ecf0f1',
+  table_header:  '#34495e',
+  table_alt_row: '#ecf0f1',
+  table_border:  '#bdc3c7',
+  insight_bg:    '#e8f4f8',
+  insight_border:'#3498db',
+};
 
 // ────────────────────────────────────────────────────────────
 // RESOLVER
+// Called by dispatcher — returns engine + prompt version
+// for the given service type ('free_reading' or paid slug)
 // ────────────────────────────────────────────────────────────
-function resolveSettings(serviceName) {
-  log(3, "Resolving settings for service", { serviceName });
-  const engine =
-    config.engineOverrides[serviceName] ||
-    config.defaultEngine;
-  const promptVersion =
-    config.promptVersions[serviceName] || "v1.0";
-  const result = {
-    serviceName,
-    engine,
-    promptVersion,
-  };
-  logResolved(result);
-  return result;
+function resolveSettings(serviceType) {
+  // serviceType = 'free_reading' → use FREE_READING_ENGINE
+  // anything else (paid slugs)  → use PAID_READING_ENGINE
+  const isFree  = serviceType === 'free_reading';
+  const engine  = isFree ? FREE_READING_ENGINE : PAID_READING_ENGINE;
+  const promptVersion = isFree
+    ? PROMPT_VERSIONS.free_reading
+    : PROMPT_VERSIONS.paid_reading;
+
+  console.log(`[${FILE}] resolveSettings("${serviceType}") → engine="${engine}" promptVersion="${promptVersion}"`);
+  return { engine, promptVersion };
 }
 
-log(5, "Settings module ready — resolveSettings() is available");
-
 module.exports = {
-  ...config,
+  FREE_READING_ENGINE,
+  PAID_READING_ENGINE,
+  PROMPT_VERSIONS,
+  REPORT_COLORS,
   resolveSettings,
 };

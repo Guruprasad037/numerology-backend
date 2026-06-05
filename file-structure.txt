@@ -15,13 +15,15 @@ numerology-backend/
   src/engines/hardcoded.js
   src/engines/claude.js
   src/engines/openai.js
+  src/engines/docx-generator.js
 
   src/middleware/auth.js
 
   src/prompts/free_reading_v1.0
-  src/prompts/free_reading_v2.0
-  src/prompts/career_1.0.js
-  src/prompts/love_1.0.js
+  src/prompts/free_reading_v2.0(EMPTY)
+  src/prompts/career_1.0.js(EMPTY)
+  src/prompts/love_1.0.js (EMPTY)
+  src/prompts/paid_reading_minimal_v1.0.js
 
   src/routes/admin.js
   src/routes/index.js
@@ -31,5 +33,6 @@ numerology-backend/
 
   src/services/free-reading.js
   src/services/reading-db.js
+  src/services/paid-reading.js
 
   src/utils/calculator.js

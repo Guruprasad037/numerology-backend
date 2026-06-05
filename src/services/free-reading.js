@@ -1,6 +1,7 @@
 // ============================================================
 //  src/services/free-reading.js
-//  v4 — birth_name removed. Chaldean uses single name only.
+//  v5 — expanded coreNumbers to 67 fields for richer free reading
+//  All fields needed for 11-card reading now sent to frontend
 // ============================================================
 
 const { buildNumerologyProfile } = require('../utils/calculator');
@@ -13,27 +14,14 @@ function log(step, message, data = null) {
   console.log(`[${FILE}] STEP ${step} ${message}`, data ? JSON.stringify(data) : '');
 }
 
-/**
- * Generate a free numerology reading.
- * @param {string} name  - The name the person goes by day-to-day
- * @param {string} dob   - ISO date string YYYY-MM-DD
- */
 async function generate(name, dob) {
   log(1, 'generate() called', { name, dob });
-  console.log(`[${FILE}] >>> ENTER generate() | name="${name}" dob="${dob}"`);
 
-  // ── Step 1: Build full Chaldean profile (all 83+ fields) ─────
-  console.log(`[${FILE}] >>> STEP 1 START: buildNumerologyProfile()`);
   const profile = buildNumerologyProfile(name, dob);
-  console.log(`[${FILE}] >>> STEP 1 DONE: profile built | keys=${Object.keys(profile).length}`);
-
   log(2, 'Profile calculated', {
     psychic_number:     profile.psychic_number,
-    psychic_compound:   profile.psychic_compound,
     destiny_number:     profile.destiny_number,
-    destiny_compound:   profile.destiny_compound,
     name_number:        profile.name_number,
-    name_compound:      profile.name_compound,
     life_path_number:   profile.life_path_number,
     soul_urge_number:   profile.soul_urge_number,
     personality_number: profile.personality_number,
@@ -47,121 +35,188 @@ async function generate(name, dob) {
     has_master_11:      profile.has_master_11,
     missing_numbers:    profile.missing_numbers,
   });
-  console.log(`[${FILE}] >>> STEP 2 DONE: profile logged`);
 
   try {
-    // ── Step 2: Engine dispatch ───────────────────────────────────
     log(3, 'Dispatching to engine: free_reading');
-    console.log(`[${FILE}] >>> STEP 3 START: dispatcher.dispatch("free_reading")`);
     const interpretations = await dispatcher.dispatch('free_reading', profile);
-    console.log(`[${FILE}] >>> STEP 3 DONE: dispatch returned | interpretations=${interpretations ? 'object' : 'null/undefined'}`);
 
     log(4, 'Engine response received', {
       keys:      interpretations ? Object.keys(interpretations) : null,
       hasCards:  !!interpretations?.cards,
       cardCount: interpretations?.cards?.length || 0,
     });
-    console.log(`[${FILE}] >>> STEP 4 DONE: engine response logged`);
 
-    // ── Step 3: Fire-and-forget DB save ──────────────────────────
-    console.log(`[${FILE}] >>> STEP 5 START: saveReading() (fire-and-forget)`);
+    // Fire-and-forget DB save
     saveReading(name, dob, profile, interpretations).catch(err =>
       console.error(`[${FILE}] DB save failed (non-fatal):`, err.message)
     );
     log(5, 'DB save triggered (non-blocking)');
-    console.log(`[${FILE}] >>> STEP 5 DONE: saveReading() triggered`);
 
-    // ── Step 4: Detect engine version ────────────────────────────
-    console.log(`[${FILE}] >>> STEP 6 START: detecting engine version`);
     const isV1 = Array.isArray(interpretations?.cards);
     log(6, 'Engine version detected', { isV1 });
-    console.log(`[${FILE}] >>> STEP 6 DONE: isV1=${isV1}`);
 
-    // ── Step 5: Core numbers — always sent to frontend ───────────
-    console.log(`[${FILE}] >>> STEP 6.2 START: building coreNumbers object`);
+    // ── Expanded coreNumbers — 67 fields ─────────────────────
+    // Everything the 11-card reading needs, nothing more.
+    // The full 90-field profile is stored in DB via saveReading().
     const coreNumbers = {
+
+      // ── Identity ───────────────────────────────────────────
+      dob_fmt: profile.dob_fmt,
+
+      // ── Psychic Number ─────────────────────────────────────
       psychic_number:        profile.psychic_number,
       psychic_compound:      profile.psychic_compound,
+      ruling_planet:         profile.ruling_planet,
+
+      // ── Destiny Number ─────────────────────────────────────
       destiny_number:        profile.destiny_number,
       destiny_compound:      profile.destiny_compound,
+
+      // ── PD Combination ─────────────────────────────────────
+      pd_combination:        profile.pd_combination,
+
+      // ── Name Number ────────────────────────────────────────
       name_number:           profile.name_number,
       name_compound:         profile.name_compound,
+
+      // ── Soul Urge ──────────────────────────────────────────
       soul_urge_number:      profile.soul_urge_number,
       soul_urge_compound:    profile.soul_urge_compound,
+
+      // ── Personality Number ─────────────────────────────────
       personality_number:    profile.personality_number,
       personality_compound:  profile.personality_compound,
-      life_path_number:      profile.life_path_number,
-      life_path_compound:    profile.life_path_compound,
+
+      // ── Maturity Number ────────────────────────────────────
       maturity_number:       profile.maturity_number,
       maturity_compound:     profile.maturity_compound,
+
+      // ── Power Number ───────────────────────────────────────
       power_number:          profile.power_number,
       power_compound:        profile.power_compound,
+
+      // ── Life Path (same as destiny in Chaldean) ────────────
+      life_path_number:      profile.life_path_number,
+      life_path_compound:    profile.life_path_compound,
+
+      // ── Birth Components ───────────────────────────────────
+      birth_day_number:      profile.birth_day_number,
+      birth_month_number:    profile.birth_month_number,
+      birth_year_number:     profile.birth_year_number,
+
+      // ── Time Cycles ────────────────────────────────────────
       personal_year_number:  profile.personal_year_number,
       personal_month_number: profile.personal_month_number,
-      ruling_planet:         profile.ruling_planet,
-      pd_combination:        profile.pd_combination,
-      missing_numbers:       profile.missing_numbers,
+      personal_day_number:   profile.personal_day_number,
+      universal_year_number: profile.universal_year_number,
+      universal_month_number:profile.universal_month_number,
+
+      // ── Pinnacles ──────────────────────────────────────────
       current_pinnacle:      profile.current_pinnacle,
+      pinnacle_1_end_age:    profile.pinnacle_1_end_age,
+      pinnacle_2:            profile.pinnacle_2,
+      pinnacle_2_end_age:    profile.pinnacle_2_end_age,
+      pinnacle_4:            profile.pinnacle_4,
+
+      // ── Challenges ─────────────────────────────────────────
       current_challenge:     profile.current_challenge,
+      challenge_1:           profile.challenge_1,
+      challenge_2:           profile.challenge_2,
+      challenge_3:           profile.challenge_3,
+      challenge_4:           profile.challenge_4,
+
+      // ── Life Periods ───────────────────────────────────────
+      current_life_period:   profile.current_life_period,
+      life_period_2_end_age: profile.life_period_2_end_age,
+
+      // ── Name Analysis ──────────────────────────────────────
+      cornerstone:           profile.cornerstone,
+      cornerstone_value:     profile.cornerstone_value,
+      capstone:              profile.capstone,
+      capstone_value:        profile.capstone_value,
+      first_vowel:           profile.first_vowel,
+      first_vowel_value:     profile.first_vowel_value,
+
+      // ── Hidden Patterns ────────────────────────────────────
+      subconscious_self:     profile.subconscious_self,
+      hidden_passions:       profile.hidden_passions,
+      karmic_lessons:        profile.karmic_lessons,
+      missing_numbers:       profile.missing_numbers,
+
+      // ── Karmic Debt ────────────────────────────────────────
       has_karmic_debt:       profile.has_karmic_debt,
       karmic_debt_numbers:   profile.karmic_debt_numbers,
+      karmic_debt_locations: profile.karmic_debt_locations,
+
+      // ── Master Numbers ─────────────────────────────────────
       has_master_11:         profile.has_master_11,
       has_master_22:         profile.has_master_22,
       has_master_33:         profile.has_master_33,
+      master_numbers_found:  profile.master_numbers_found,
+
+      // ── Planes of Expression ───────────────────────────────
       dominant_plane:        profile.dominant_plane,
-      essence_number:        profile.essence_number,
+      plane_mental_count:    profile.plane_mental_count,
+      plane_physical_count:  profile.plane_physical_count,
+      plane_emotional_count: profile.plane_emotional_count,
+      plane_intuitive_count: profile.plane_intuitive_count,
+
+      // ── Bridge Numbers ─────────────────────────────────────
+      soul_expression_bridge:  profile.soul_expression_bridge,
+      life_personality_bridge: profile.life_personality_bridge,
+
+      // ── Additional Derived ─────────────────────────────────
+      rational_thought_number: profile.rational_thought_number,
+      balance_number:          profile.balance_number,
+      essence_number:          profile.essence_number,
+
+      // ── Transits ───────────────────────────────────────────
+      physical_transit:        profile.physical_transit,
+      physical_transit_value:  profile.physical_transit_value,
+      mental_transit:          profile.mental_transit,
+      mental_transit_value:    profile.mental_transit_value,
+      spiritual_transit:       profile.spiritual_transit,
+      spiritual_transit_value: profile.spiritual_transit_value,
     };
-    console.log(`[${FILE}] >>> STEP 6.2 DONE: coreNumbers built | keys=${Object.keys(coreNumbers).length}`);
 
     let result;
 
     if (isV1) {
-      console.log(`[${FILE}] >>> STEP 6.3 START: building result (V1 engine path)`);
       result = {
         name,
-        dob_fmt: profile.dob_fmt,
         ...coreNumbers,
-        first_name:     interpretations.first_name || name,
+        first_name:     interpretations.first_name || name.split(' ')[0],
         cards:          interpretations.cards  || [],
         cta:            interpretations.cta    || null,
         traits:         interpretations.traits || [],
         dominant_theme: interpretations.dominant_theme || '',
         reading:        interpretations.cards?.[0]?.body || null,
       };
-      console.log(`[${FILE}] >>> STEP 6.3 DONE: V1 result built | cards=${result.cards.length} traits=${result.traits.length} hasCTA=${!!result.cta}`);
     } else {
-      // Legacy hardcoded engine path
-      log('6.1', 'Legacy engine detected (non-v1)');
-      console.log(`[${FILE}] >>> STEP 6.1 START: building result (legacy engine path)`);
       const firstCard = interpretations?.birth || {};
       result = {
         name,
-        dob_fmt: profile.dob_fmt,
         ...coreNumbers,
-        first_name:     name,
+        first_name:     name.split(' ')[0],
         reading:        firstCard.text   || null,
         traits:         firstCard.traits || [],
         cards:          [],
         cta:            null,
         dominant_theme: '',
       };
-      console.log(`[${FILE}] >>> STEP 6.1 DONE: legacy result built | hasReading=${!!result.reading} traits=${result.traits.length}`);
     }
 
     log(7, 'Final response built', {
       cardCount:  result.cards?.length || 0,
       hasCTA:     !!result.cta,
       traitCount: result.traits?.length || 0,
+      fieldCount: Object.keys(result).length,
     });
-    console.log(`[${FILE}] >>> STEP 7 DONE: final result ready | cardCount=${result.cards?.length || 0} hasCTA=${!!result.cta} traitCount=${result.traits?.length || 0}`);
-    console.log(`[${FILE}] >>> EXIT generate() SUCCESS`);
 
     return result;
 
   } catch (err) {
     log(99, 'ERROR in generate()', { message: err.message, stack: err.stack });
-    console.error(`[${FILE}] >>> STEP 99 FATAL ERROR in generate() | message="${err.message}"`);
-    console.error(`[${FILE}] >>> STACK TRACE:`, err.stack);
     throw err;
   }
 }

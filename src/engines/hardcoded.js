@@ -1,554 +1,338 @@
 // ============================================================
-//  src/engines/hardcoded.js
-//  Chaldean Numerology — v2 (Schema v3 field names)
+//  src/engines/hardcoded.js  v3
+//  11 cards (Master Number) + 1 CTA = 12 total dots
 //
-//  FIXES from v1:
-//    - All field names updated to match calculator.js output:
-//        birth_num        → psychic_number
-//        life_path_num    → life_path_number  (same as destiny_number in Chaldean)
-//        expression_num   → name_number
-//        soul_urge_num    → soul_urge_number
-//        personality_num  → personality_number
-//        maturity_num     → maturity_number
-//        personal_year    → personal_year_number
-//    - firstName now reads profile.name_used (not profile.name)
-//    - Cards reference Chaldean terminology throughout:
-//        "Psychic Number" not "Birth Number"
-//        "Destiny Number" not "Life Path"
-//        "Name Number" not "Expression"
-//    - Ruling planet (from psychic_number) referenced in cards
-//    - Compound numbers referenced where they differ
-//    - Indian cultural context woven into interpretations
-//    - CTA updated with real numbers (no undefined)
+//  Key changes from v2:
+//    - No accent circles — inline personalised text instead
+//    - Card 1 = curiosity hook about 90+ numbers
+//    - Cards 2-10 = deep Chaldean reading
+//    - Card 11 = FOMO card naming unrevealed numbers
+//    - CTA = single Full Reading product
 // ============================================================
 
-// ── Helper ────────────────────────────────────────────────────
-function interp(table, number) {
-  const entry = table[number];
-  if (!entry) return null;
-  return { number, label: entry.label || null, traits: entry.traits || [], text: entry.text || null };
-}
-
-// ══════════════════════════════════════════════════════════════
-//  PSYCHIC NUMBER (1–9)
-//  The day of birth reduced. Core personality, raw instinct.
-// ══════════════════════════════════════════════════════════════
 const PSYCHIC = {
-  1: { label: 'The Pioneer',    planet: 'Sun',     traits: ['Leader','Independent','Ambitious','Self-reliant','Determined'],
-       text: `Your Psychic Number is 1, ruled by the Sun — the king of all planets in Vedic tradition. You carry the energy of the pioneer: someone who leads not by appointment but by nature. Before you have spoken a word, people sense that you have already decided.\n\nYou think independently and trust your own instincts above consensus. This is your greatest strength. In a culture that often values collective harmony over individual direction, your clarity can feel like disruption — but it is actually leadership in its purest form.\n\nYour challenge is learning to include others without feeling diminished by it. True authority inspires; it does not insist. Channel your Sun energy into vision, and people will follow with genuine loyalty.` },
-
-  2: { label: 'The Peacemaker', planet: 'Moon',    traits: ['Diplomatic','Sensitive','Cooperative','Intuitive','Harmonious'],
-       text: `Your Psychic Number is 2, ruled by the Moon — the planet of mind, emotion, and deep intuition in Vedic astrology. You are wired for connection. You read the emotional temperature of a room before most people have even sat down.\n\nYou have a gift that is rare and often underestimated: you make people feel genuinely heard. In Indian families and workplaces, this skill builds the invisible architecture of trust that holds everything together.\n\nYour journey is learning to honour your own needs as deeply as you honour everyone else's. The Moon's power comes from its fullness — not from giving its light away until nothing remains.` },
-
-  3: { label: 'The Creator',    planet: 'Jupiter', traits: ['Creative','Expressive','Optimistic','Communicative','Joyful'],
-       text: `Your Psychic Number is 3, ruled by Jupiter — the Guru of the planets in Vedic tradition. You carry the energy of expansion, creativity, and the irresistible urge to express. Words, ideas, stories — they flow through you naturally.\n\nJupiter blesses you with optimism that is not naivety but genuine wisdom about possibility. You see potential where others see obstacles. This quality draws people toward you without effort.\n\nYour challenge is focus. Jupiter's abundance can scatter your gifts across too many directions at once. Choose one canvas, commit to it fully, and what you build will carry the mark of someone who understood both inspiration and discipline.` },
-
-  4: { label: 'The Builder',    planet: 'Rahu',    traits: ['Grounded','Disciplined','Reliable','Methodical','Enduring'],
-       text: `Your Psychic Number is 4, ruled by Rahu — the shadow planet associated with worldly ambition, unconventional paths, and karmic acceleration. You are the builder: someone who understands that lasting things require patient, unglamorous work.\n\nRahu gives you an unusual quality among 4s — a hunger to break convention even while constructing something solid. You are not content with the traditional path if a better one exists. You will find it, then build it better than anyone expected.\n\nYour growth edge is flexibility. The structures you create are strongest when they have room to evolve. Rahu's energy rewards those who can hold both the blueprint and the willingness to redraw it.` },
-
-  5: { label: 'The Explorer',   planet: 'Mercury', traits: ['Adaptable','Curious','Magnetic','Quick-minded','Versatile'],
-       text: `Your Psychic Number is 5, ruled by Mercury — the planet of intelligence, communication, and rapid movement. You are wired for variety, stimulation, and the thrill of what lies around the next corner.\n\nYou adapt faster than almost anyone around you. In business, in relationships, in any new environment — you orient quickly and find your footing before others have stopped feeling lost. This is a rare and valuable quality.\n\nYour deepest lesson is stillness. Mercury's speed can become restlessness. Some of your most important discoveries will come not from moving toward the next thing, but from sitting long enough with what is already here.` },
-
-  6: { label: 'The Nurturer',   planet: 'Venus',   traits: ['Devoted','Compassionate','Responsible','Harmonious','Aesthetic'],
-       text: `Your Psychic Number is 6, ruled by Venus — the planet of love, beauty, harmony, and material grace. You feel a deep calling to protect what matters: your family, your relationships, the spaces and people you have claimed as your own.\n\nIn the Indian context, the 6 energy is the foundation of the household — the person who makes a house feel like a home, who remembers everyone's needs, who holds things together when the pressure is highest.\n\nYour lesson is boundaries. Venus's love is inexhaustible — but yours is not. Giving from an empty well helps no one. Learning to receive as generously as you give is the central spiritual work of your Psychic 6 life.` },
-
-  7: { label: 'The Seeker',     planet: 'Ketu',    traits: ['Analytical','Introspective','Spiritual','Perceptive','Solitary'],
-       text: `Your Psychic Number is 7, ruled by Ketu — the most spiritual of all Vedic planetary influences, associated with liberation, past-life wisdom, and detachment from the material world. You are not here for surface answers.\n\nYou observe more than you speak. You think in layers. In a world that rewards confident noise, your quiet discernment can be mistaken for aloofness — but those who know you understand that you see things others simply cannot.\n\nKetu's influence gives you an unusual relationship with the material world: you can succeed in it, but you are never fully of it. Your greatest growth comes when you learn to trust your inner knowing enough to act on it — not just observe.` },
-
-  8: { label: 'The Powerhouse', planet: 'Saturn',  traits: ['Ambitious','Strategic','Authoritative','Resilient','Masterful'],
-       text: `Your Psychic Number is 8, ruled by Saturn — the planet of karma, discipline, and the rewards that come only to those who have earned them. You are built for mastery. Not the performance of power, but the real thing.\n\nSaturn's blessing is delayed but profound. The 8 who does the work — honestly, patiently, without shortcuts — receives returns that compound over time. In business, in reputation, in relationships, you play a long game that others cannot sustain.\n\nYour shadow is control. Saturn can make the 8 grip too tightly, trust too little, and exhaust themselves trying to manage what cannot be managed. Your deepest freedom will come when you discover that genuine authority requires the willingness to let go.` },
-
-  9: { label: 'The Old Soul',   planet: 'Mars',    traits: ['Compassionate','Wise','Generous','Idealistic','Universal'],
-       text: `Your Psychic Number is 9, ruled by Mars — the planet of courage, action, and the warrior's discipline. In Chaldean tradition, 9 is the sacred number, the completion of the cycle. You carry lifetimes of accumulated understanding in this single life.\n\nYou feel the weight of other people's suffering as if it were your own. This is not a burden — it is the specific shape of your purpose. Mars gives you the courage to actually do something about it, rather than merely feel it.\n\nYour challenge is release. The 9 holds on — to grief, to people, to what should have been. Your greatest freedom arrives the moment you learn that letting go is not loss. It is how you make room for everything that is still coming.` },
+  1:{ label:'The Pioneer',    planet:'Sun',     traits:['Leader','Independent','Ambitious','Self-reliant','Determined'],
+      text:(fn,n,planet,comp)=>`${fn}, your Psychic Number is ${n}${comp&&comp!==n?` (compound ${comp})`:''}${planet?`, ruled by the ${planet}`:''}.\n\nYou carry the energy of the pioneer — someone who leads not by appointment but by nature. Before you have spoken, people sense you have already decided. You think independently and trust your own instincts above collective opinion. In the Vedic tradition, the Sun governs authority, visibility, and the self that cannot be hidden.\n\nYour instinctive response to any situation is to take ownership of it. This is both your greatest strength and your most demanding teacher.` },
+  2:{ label:'The Peacemaker', planet:'Moon',    traits:['Diplomatic','Sensitive','Cooperative','Intuitive','Harmonious'],
+      text:(fn,n,planet,comp)=>`${fn}, your Psychic Number is ${n}${comp&&comp!==n?` (compound ${comp})`:''}${planet?`, ruled by the ${planet}`:''}.\n\nYou are wired for connection. You read the emotional temperature of a room before most people have even sat down — sensing what others feel before they have named it themselves. This is not sensitivity in the fragile sense. It is intelligence of a rare kind.\n\nThe Moon governs the mind, emotions, and the tides of feeling. You are its expression: fluid, perceptive, and capable of extraordinary attunement to other people's inner worlds.` },
+  3:{ label:'The Creator',    planet:'Jupiter', traits:['Creative','Expressive','Optimistic','Communicative','Joyful'],
+      text:(fn,n,planet,comp)=>`${fn}, your Psychic Number is ${n}${comp&&comp!==n?` (compound ${comp})`:''}${planet?`, ruled by ${planet}`:''}.\n\nYou carry the energy of expansion and expression. Ideas arrive in bursts; words flow naturally; people feel more alive in your presence. Jupiter — the Guru of the planets in Vedic tradition — blesses you with an optimism that is not naivety but genuine wisdom about what is possible.\n\nYour challenge is focus. Jupiter's abundance can scatter gifts across too many directions. The version of you that commits fully to one canvas is the one that changes things.` },
+  4:{ label:'The Builder',    planet:'Rahu',    traits:['Grounded','Disciplined','Reliable','Methodical','Enduring'],
+      text:(fn,n,planet,comp)=>`${fn}, your Psychic Number is ${n}${comp&&comp!==n?` (compound ${comp})`:''}${planet?`, ruled by ${planet}`:''}.\n\nYou understand, at a bone-deep level, that lasting things require patient, unglamorous work. Rahu — the shadow planet of ambition and karmic acceleration — gives you a hunger to break convention even while building something solid.\n\nYou are not content with the traditional path if a better one exists. You will find it, then build it better than anyone expected.` },
+  5:{ label:'The Explorer',   planet:'Mercury', traits:['Adaptable','Curious','Magnetic','Quick-minded','Versatile'],
+      text:(fn,n,planet,comp)=>`${fn}, your Psychic Number is ${n}${comp&&comp!==n?` (compound ${comp})`:''}${planet?`, ruled by ${planet}`:''}.\n\nMercury — the planet of intelligence, communication, and rapid movement — governs your instinctive self. You adapt faster than almost anyone around you. In any new environment, you orient and find your footing before others have stopped feeling lost.\n\nYour deepest lesson is stillness. Mercury's speed can become restlessness. Some of your most important discoveries will come from sitting long enough with what is already here.` },
+  6:{ label:'The Nurturer',   planet:'Venus',   traits:['Devoted','Compassionate','Responsible','Harmonious','Aesthetic'],
+      text:(fn,n,planet,comp)=>`${fn}, your Psychic Number is ${n}${comp&&comp!==n?` (compound ${comp})`:''}${planet?`, ruled by ${planet}`:''}.\n\nVenus governs your instinctive world — love, beauty, harmony, and the deep pull toward protecting what matters. You feel a calling to nurture: your family, your relationships, the spaces and people you have claimed as your own.\n\nYour challenge is learning to receive as generously as you give — love that flows only outward eventually runs dry.` },
+  7:{ label:'The Seeker',     planet:'Ketu',    traits:['Analytical','Introspective','Spiritual','Perceptive','Solitary'],
+      text:(fn,n,planet,comp)=>`${fn}, your Psychic Number is ${n}${comp&&comp!==n?` (compound ${comp})`:''}${planet?`, ruled by ${planet}`:''}.\n\nKetu — the south node, the most spiritual of all Vedic planetary influences — governs your instinctive self. You are not here for surface answers. You observe more than you speak, think in layers, and carry what feels like memories of questions you have been asking across lifetimes.\n\nIn a world that rewards confident noise, your quiet discernment is mistaken for aloofness. Those who know you understand that you see things others simply cannot.` },
+  8:{ label:'The Powerhouse', planet:'Saturn',  traits:['Ambitious','Strategic','Authoritative','Resilient','Masterful'],
+      text:(fn,n,planet,comp)=>`${fn}, your Psychic Number is ${n}${comp&&comp!==n?` (compound ${comp})`:''}${planet?`, ruled by ${planet}`:''}.\n\nSaturn — the planet of karma, discipline, and earned rewards — governs your instinctive self. You are built for mastery. Not the performance of power, but the real thing: the authority that comes from having done the work others walked away from.\n\nSaturn's blessing is delayed but profound. The 8 who does the work — honestly, patiently, without shortcuts — receives returns that compound over time.` },
+  9:{ label:'The Old Soul',   planet:'Mars',    traits:['Compassionate','Wise','Generous','Idealistic','Universal'],
+      text:(fn,n,planet,comp)=>`${fn}, your Psychic Number is ${n}${comp&&comp!==n?` (compound ${comp})`:''}${planet?`, ruled by ${planet}`:''}.\n\nIn Chaldean tradition, 9 is the sacred number — the completion of the cycle. Mars gives you the courage to act on what you feel, rather than merely carry it. You feel the weight of other people's suffering as if it were your own, and you are wired to do something about it.\n\nYour challenge is release. The 9 holds on — to grief, to people, to what should have been. Your greatest freedom arrives when you learn that letting go is not loss.` },
 };
 
-// ══════════════════════════════════════════════════════════════
-//  DESTINY NUMBER (1–9, 11, 22, 33 + karmic 13, 14, 16, 19)
-//  Full DOB all digits summed. Life direction and purpose.
-// ══════════════════════════════════════════════════════════════
 const DESTINY = {
-  1:  { label: 'The Independent Leader',   traits: ['Self-starter','Courageous','Original','Driven','Bold'],
-        text: `Your Destiny Number is 1 — a life oriented around independence, initiation, and the courage to forge your own path. You did not come here to follow a map. You came here to draw one.\n\nEvery challenge life places in front of you is, at its core, an invitation to discover how resourceful you actually are. The obstacles are not obstacles — they are the curriculum.\n\nThe shadow of this Destiny is isolation: the belief that strength means needing no one. Your growth arrives when you discover that the most powerful leaders are also the most open learners. Independence is not the absence of connection; it is the freedom to connect without losing yourself.` },
-
-  2:  { label: 'The Harmoniser',           traits: ['Empathic','Collaborative','Patient','Perceptive','Devoted'],
-        text: `Your Destiny Number is 2 — a life built around partnership, sensitivity, and the quiet art of bringing people together. You are here to find the thread of understanding that connects opposing forces.\n\nYou feel things more deeply than the people around you realise. This is not weakness — it is a form of intelligence. Your sensitivity allows you to perceive what others miss entirely, and to offer comfort that reaches the actual root.\n\nYour growth edge: harmony cannot always be maintained, and sometimes the most loving thing you can do is allow conflict to surface so it can be genuinely resolved. The 2 who learns this becomes not just a peacemaker but a transformer.` },
-
-  3:  { label: 'The Communicator',         traits: ['Expressive','Playful','Inspiring','Creative','Abundant'],
-        text: `Your Destiny Number is 3 — a life of expression, creativity, and the gift of making the inner world shareable. You are here to communicate: in whatever form that takes, you translate the invisible into something others can hold.\n\nYou have a rare ability to take complex feelings and give them a shape that others recognise. This is a form of service, even when it looks like play.\n\nYour challenge is depth over breadth. The 3 Destiny can scatter gifts across too many directions and wonder why nothing takes root. One expression, fully committed to, will multiply beyond anything you imagined from the outside.` },
-
-  4:  { label: 'The Foundation Maker',     traits: ['Structured','Loyal','Methodical','Honest','Enduring'],
-        text: `Your Destiny Number is 4 — a life oriented around building, dedication, and the creation of things that outlast you. You are here to make something real: a business, a family legacy, a body of knowledge, a foundation others will stand on.\n\nYou understand, at a bone-deep level, that real things take real time. In a world addicted to speed, your commitment to quality is quietly radical.\n\nYour shadow is rigidity. When the blueprint stops working, the 4 Destiny can double down instead of adapting. Remember: the strongest structures have room to flex. Adaptability is not failure — it is advanced engineering.` },
-
-  5:  { label: 'The Freedom Seeker',       traits: ['Dynamic','Versatile','Fearless','Progressive','Magnetic'],
-        text: `Your Destiny Number is 5 — a life of transformation, experience, and the full, unfiltered range of what it means to be alive. You are here to experience the spectrum, and then bring that wisdom back as something others can use.\n\nChange is not something that happens to you — you carry it with you wherever you go. In any new environment, you orient faster than anyone around you, and your ease with the unfamiliar makes others feel safe enough to follow.\n\nYour deepest lesson: true freedom is not the absence of commitment. It is choosing, with full awareness, what you are committed to. The 5 who masters this becomes genuinely unstoppable.` },
-
-  6:  { label: 'The Caretaker',            traits: ['Loving','Protective','Harmonious','Responsible','Devoted'],
-        text: `Your Destiny Number is 6 — a life of love, service, and the creation of beauty and belonging. You are here to nurture: not just individuals, but the spaces, families, and communities that people call home.\n\nYou have an extraordinary capacity for love — the kind that shows up, remembers, stays when others leave. This is your gift and your calling. In the Indian tradition, the 6 Destiny is the energy of the householder who makes civilisation possible.\n\nYour lesson: love given from compulsion or fear depletes. The 6 who learns to give freely — without tallying the return — discovers that genuine love is, in fact, infinite.` },
-
-  7:  { label: 'The Truth Seeker',         traits: ['Introspective','Analytical','Spiritual','Wise','Private'],
-        text: `Your Destiny Number is 7 — a life of depth, solitude, and the relentless pursuit of truth beneath the surface. You are here to go beneath the obvious — of ideas, of relationships, of yourself — and return with understanding that changes things.\n\nYou are most alive in genuine questions: the kind that cannot be rushed or answered with a Google search. Your relationship with mystery is comfortable in ways others find unsettling.\n\nYour challenge: the wall. The 7 Destiny who only analyses without trusting, who questions without surrendering, eventually becomes isolated in their own precision. Wisdom only changes things when it is shared.` },
-
-  8:  { label: 'The Manifestor',           traits: ['Ambitious','Authoritative','Executive','Resilient','Karmic'],
-        text: `Your Destiny Number is 8 — a life of power, abundance, and the mastery of the material world. You are here to build, to lead, and to understand how real power actually works — not the performance of it, but the substance.\n\nYou have an instinct for leverage: where to apply pressure, when to wait, how to position for maximum impact. When this gift is aligned with integrity, what you build becomes legendary in the Indian business tradition.\n\nThe shadow of the 8 Destiny: the belief that more is always better. The 8 who is endlessly accumulating has not yet met their own depth. Your greatest power lies in knowing when enough is enough.` },
-
-  9:  { label: 'The Humanitarian',         traits: ['Selfless','Visionary','Compassionate','Universal','Generous'],
-        text: `Your Destiny Number is 9 — a life of completion, giving, and service to something larger than personal ambition. The 9 holds all other numbers within it, and you feel that weight: a responsibility not just to your own life but to the larger human story.\n\nYou are moved by injustice. You carry other people's pain as if it were your own. In the Indian tradition, this is the energy of seva — selfless service — at its most genuine.\n\nYour lesson: release. The 9 Destiny asks you to love without possessing, give without needing credit, and allow endings so beginnings can arrive. Everything you release makes room for more.` },
-
-  11: { label: 'The Inspired Messenger',   traits: ['Visionary','Intuitive','Illuminating','Sensitive','Channelling'],
-        text: `Your Destiny is the Master Number 11 — one of the most spiritually charged journeys in Chaldean numerology. You are here as a bridge between the invisible world of intuition and the visible world of human experience.\n\nYou have always sensed that you are meant for something beyond the ordinary, even when you could not name it. This is accurate. The 11 is not designed for average output — you are here to inspire, elevate, and reveal what shimmers beneath the surface of the everyday.\n\nYour greatest challenge is your greatest gift: extreme sensitivity. The same openness that allows you to channel higher insight makes the noise of the world genuinely overwhelming. Your work is learning to stay open without being consumed.` },
-
-  22: { label: 'The Master Builder',       traits: ['Visionary','Disciplined','Powerful','Transformative','Grounded'],
-        text: `Your Destiny is the Master Number 22 — the rarest and most powerful Destiny in Chaldean numerology. You are here to turn the most ambitious visions into concrete reality. Not personal achievement: structures that reshape how people live.\n\nYou contain both the idealism of 11 and the discipline of 4. When these work in concert, there is almost nothing you cannot build. Institutions, movements, families, systems — all can carry your blueprint.\n\nYour challenge is the weight of your own potential. The 22 who has not yet stepped into their power often feels this as anxiety or procrastination — the fear of failing something important. Begin. The vision clarifies in motion.` },
-
-  33: { label: 'The Master Teacher',       traits: ['Selfless','Compassionate','Uplifting','Transcendent','Unconditional'],
-        text: `Your Destiny is the Master Number 33 — the rarest and most selfless of all Destinies. You are here to embody unconditional love at a scale that touches not individuals, but communities.\n\nThe 33 Destiny rarely fully arrives until mid-life or later. Until then, you may feel a persistent sense of not-yet, of a purpose just out of reach. This is not failure — this is preparation. The universe is building the vessel before it pours in the water.\n\nYour work is love in its fullest expression: not sentiment, but fierce, unwavering presence. The kind that will not abandon another person in their darkness. The world needs this. And you were made for it.` },
-
-  // Karmic debt Destinies
-  13: { label: 'The Transformer (13/4)',   traits: ['Disciplined','Determined','Transformative','Grounded','Karmic'],
-        text: `Your Destiny carries the karmic number 13, reducing to 4. This compound carries the energy of transformation through sustained effort. In a previous karmic cycle, there may have been a pattern of avoiding the hard work — the 13 is life's gentle but firm insistence that this time, things will be built properly.\n\nThis does not mean your path is harder than others — it means that the discipline you develop has a depth and authenticity that most people never find. Every time you complete something difficult, you are settling a debt and building genuine mastery simultaneously.\n\nThe 13/4 Destiny often produces people who become extraordinary precisely because they had to earn everything. Nothing is taken for granted. That is the gift inside the work.` },
-
-  14: { label: 'The Freedom Earner (14/5)', traits: ['Adaptable','Disciplined','Freedom-seeking','Resilient','Karmic'],
-        text: `Your Destiny carries the karmic number 14, reducing to 5. This compound carries the energy of freedom that must be earned through responsibility — not freedom that is simply taken.\n\nIn a previous karmic cycle, there may have been a pattern of overindulgence in personal liberty at the expense of others. In this life, the invitation is to discover what responsible freedom actually looks like: adventure with awareness, change with integrity.\n\nThe 14/5 Destiny often produces extraordinary travellers — people who move through the world with genuine wisdom because they learned, sometimes through difficult experience, that real freedom requires knowing when not to run.` },
-
-  16: { label: 'The Spiritual Rebuilder (16/7)', traits: ['Introspective','Humble','Spiritual','Transformative','Karmic'],
-        text: `Your Destiny carries the karmic number 16, reducing to 7. This is one of the most spiritually significant compounds in Chaldean numerology. It carries the energy of the fall of ego and the rebuilding of something more genuine in its place.\n\nThe 16/7 Destiny tends to produce people whose most profound growth arrives through experiences of loss, humbling, or radical disruption — not as punishment, but as the universe ensuring that your considerable gifts are built on wisdom rather than pride.\n\nWhat emerges from this process is extraordinary: a spiritual depth and authentic humility that no other path produces. The 16/7 who has done the inner work becomes one of the most genuinely wise presences in any room they enter.` },
-
-  19: { label: 'The Independent Spirit (19/1)', traits: ['Courageous','Self-reliant','Independent','Transformative','Karmic'],
-        text: `Your Destiny carries the karmic number 19, reducing to 1. This compound carries the energy of independence that must be balanced with genuine care for others — the learning of interdependence by someone who begins as deeply self-sufficient.\n\nIn a previous karmic cycle, there may have been a pattern of using personal power without adequate consideration of its effect on others. In this life, the invitation is to discover that true strength includes the willingness to need people, and to allow them to need you in return.\n\nThe 19/1 Destiny often produces the most inspiring leaders — people whose authority is genuine because it was forged in the understanding that power without compassion is just control.` },
+  1: { label:'The Independent Leader',    traits:['Self-starter','Courageous','Original','Driven'],
+       text:(fn,n,comp)=>`${fn}, your Destiny Number is ${n}${comp&&comp!==n?` — compound ${comp}`:''}. This is the overarching direction of your entire life: not who you are instinctively, but who you are being asked to become.\n\nA Destiny 1 is a life oriented around independence, initiation, and the courage to forge your own path. Every challenge that finds you is, at its core, an invitation to discover how resourceful you actually are.\n\nThe shadow of this Destiny is isolation: the belief that strength means needing no one. Your growth arrives when you discover that the most powerful leaders are also the most open learners.` },
+  2: { label:'The Harmoniser',            traits:['Empathic','Collaborative','Patient','Perceptive'],
+       text:(fn,n,comp)=>`${fn}, your Destiny Number is ${n}${comp&&comp!==n?` — compound ${comp}`:''}.\n\nA life built around partnership, sensitivity, and the quiet art of bringing people together. You feel things more deeply than the people around you realise — this is not weakness, it is a form of intelligence that perceives what others miss entirely.\n\nYour growth edge: harmony cannot always be maintained, and sometimes the most loving thing you can do is allow conflict to surface so it can be genuinely resolved.` },
+  3: { label:'The Communicator',          traits:['Expressive','Playful','Inspiring','Creative'],
+       text:(fn,n,comp)=>`${fn}, your Destiny Number is ${n}${comp&&comp!==n?` — compound ${comp}`:''}.\n\nA life of expression, creativity, and the gift of making the inner world shareable. You are here to communicate — to translate the invisible into something others can hold. This is a form of service, even when it looks like play.\n\nYour challenge is depth over breadth. One expression, fully committed to, will multiply beyond anything you imagined from the outside.` },
+  4: { label:'The Foundation Maker',      traits:['Structured','Loyal','Methodical','Honest'],
+       text:(fn,n,comp)=>`${fn}, your Destiny Number is ${n}${comp&&comp!==n?` — compound ${comp}`:''}.\n\nA life oriented around building, dedication, and the creation of things that outlast you. You understand at a bone-deep level that real things take real time. In a world addicted to shortcuts, your commitment to quality is quietly radical.\n\nYour shadow is rigidity. Adaptability is not failure — it is advanced engineering.` },
+  5: { label:'The Freedom Seeker',        traits:['Dynamic','Versatile','Fearless','Progressive'],
+       text:(fn,n,comp)=>`${fn}, your Destiny Number is ${n}${comp&&comp!==n?` — compound ${comp}`:''}.\n\nA life of transformation, experience, and the full unfiltered range of what it means to be alive. Change is not something that happens to you — you carry it with you wherever you go.\n\nYour deepest lesson: true freedom is not the absence of commitment. It is choosing, with full awareness, what you are committed to.` },
+  6: { label:'The Caretaker',             traits:['Loving','Protective','Harmonious','Responsible'],
+       text:(fn,n,comp)=>`${fn}, your Destiny Number is ${n}${comp&&comp!==n?` — compound ${comp}`:''}.\n\nA life of love, service, and the creation of beauty and belonging. You have an extraordinary capacity for love — the kind that shows up, remembers, stays when others leave.\n\nYour lesson: love given from compulsion or fear depletes. The 6 who learns to give freely discovers that genuine love is infinite.` },
+  7: { label:'The Truth Seeker',          traits:['Introspective','Analytical','Spiritual','Wise'],
+       text:(fn,n,comp)=>`${fn}, your Destiny Number is ${n}${comp&&comp!==n?` — compound ${comp}`:''}.\n\nA life of depth, solitude, and the relentless pursuit of truth beneath the surface. You are most alive in genuine questions — the kind that cannot be rushed or answered quickly.\n\nYour challenge: the wall. The 7 Destiny who only analyses without trusting eventually becomes isolated in their own precision. Wisdom only changes things when it is shared.` },
+  8: { label:'The Manifestor',            traits:['Ambitious','Authoritative','Executive','Resilient'],
+       text:(fn,n,comp)=>`${fn}, your Destiny Number is ${n}${comp&&comp!==n?` — compound ${comp}`:''}.\n\nA life of power, abundance, and mastery of how the material world actually works. You have an instinct for leverage. When this gift is aligned with integrity, what you build becomes something that is still standing long after you are gone.\n\nThe shadow: the belief that more is always better. Your greatest power lies in knowing when enough is enough.` },
+  9: { label:'The Humanitarian',          traits:['Selfless','Visionary','Compassionate','Universal'],
+       text:(fn,n,comp)=>`${fn}, your Destiny Number is ${n}${comp&&comp!==n?` — compound ${comp}`:''}.\n\nA life of completion, giving, and service to something larger than personal ambition. The 9 holds all other numbers within it, and you feel that weight.\n\nYour lesson: release. The 9 Destiny asks you to love without possessing, give without needing credit, and allow endings so beginnings can arrive.` },
+  11:{ label:'The Inspired Messenger',    traits:['Visionary','Intuitive','Illuminating','Sensitive'],
+       text:(fn,n,comp)=>`${fn}, your Destiny is the Master Number 11${comp&&comp!==n?` — compound ${comp}`:''}.\n\nOne of the most spiritually charged journeys in all of Chaldean numerology. You are here as a bridge between the invisible world of intuition and the visible world of human experience. The 11 is not designed for average output — you are here to inspire, elevate, and reveal what shimmers beneath the surface of the everyday.\n\nYour greatest challenge is your greatest gift: extreme sensitivity that allows insight but makes the noise of the world genuinely overwhelming.` },
+  22:{ label:'The Master Builder',        traits:['Visionary','Disciplined','Powerful','Transformative'],
+       text:(fn,n,comp)=>`${fn}, your Destiny is the Master Number 22${comp&&comp!==n?` — compound ${comp}`:''}.\n\nThe rarest and most powerful Destiny in Chaldean numerology. You are here to turn the most ambitious visions into concrete reality — not personal achievement, but structures that reshape how people live.\n\nYour challenge is the weight of your own potential. Begin. The vision clarifies in motion.` },
+  13:{ label:'The Transformer (13/4)',     traits:['Disciplined','Determined','Transformative','Karmic'],
+       text:(fn,n,comp)=>`${fn}, your Destiny carries the karmic compound 13, reducing to 4.\n\nThe energy of transformation through sustained effort. Every time you complete something difficult, you are settling a karmic debt and building genuine mastery simultaneously. The 13 is not a punishment — it is accelerated growth for a soul that once avoided the work.\n\nThe 13/4 Destiny often produces people who become extraordinary precisely because they had to earn everything.` },
+  14:{ label:'The Freedom Earner (14/5)', traits:['Adaptable','Disciplined','Freedom-seeking','Karmic'],
+       text:(fn,n,comp)=>`${fn}, your Destiny carries the karmic compound 14, reducing to 5.\n\nThe energy of freedom that must be earned through responsibility. In a previous karmic cycle there may have been a pattern of overindulgence in personal liberty at the expense of others.\n\nIn this life, the invitation is to discover what responsible freedom actually looks like: adventure with awareness, change with integrity.` },
+  16:{ label:'The Spiritual Rebuilder (16/7)', traits:['Introspective','Humble','Spiritual','Karmic'],
+       text:(fn,n,comp)=>`${fn}, your Destiny carries the karmic compound 16, reducing to 7.\n\nOne of the most spiritually significant compounds in Chaldean numerology — the energy of the fall of ego and the rebuilding of something more genuine. Your most profound growth arrives through experiences of loss or humbling.\n\nWhat emerges is extraordinary: a spiritual depth and authentic humility that no other path produces.` },
+  19:{ label:'The Independent Spirit (19/1)', traits:['Courageous','Self-reliant','Independent','Karmic'],
+       text:(fn,n,comp)=>`${fn}, your Destiny carries the karmic compound 19, reducing to 1.\n\nThe energy of independence that must be balanced with genuine care for others. In this life, the invitation is to discover that true strength includes the willingness to need people, and to allow them to need you in return.\n\nThe 19/1 Destiny often produces the most inspiring leaders — people whose authority is genuine because it was forged in understanding that power without compassion is just control.` },
 };
 
-// ══════════════════════════════════════════════════════════════
-//  NAME NUMBER (1–9, 11, 22)
-//  Chaldean value of daily-use name. Outer talent, expression.
-// ══════════════════════════════════════════════════════════════
-const NAME_NUM = {
-  1:  { label: 'The Natural Leader',          traits: ['Original','Assertive','Initiative','Independent','Pioneering'],
-        text: `Your Name Number is 1 — your name carries the energy of originality and natural authority. Before you have spoken, your name itself projects the quality of someone who knows where they are going.\n\nYour talents are strongest in domains where your individual vision can be expressed without being diluted: entrepreneurship, creative leadership, or any field where initiative is the primary currency.\n\nYour growth lies in recognising that your originality is most powerful when it invites others in rather than leaving them behind. The greatest leaders create other leaders.` },
-
-  2:  { label: 'The Collaborator',            traits: ['Mediating','Supportive','Tactful','Intuitive','Detail-oriented'],
-        text: `Your Name Number is 2 — your name carries the energy of diplomacy and quiet perception. You have an almost effortless ability to hold space for multiple perspectives simultaneously.\n\nYou excel in roles that require tact, cooperation, and careful attention to the human element: counselling, teaching, partnerships, or any work where bridges between people need to be built.\n\nYour growth is in recognising that your contributions are not smaller for being quiet. The person who holds the team together is as essential as the one who leads it.` },
-
-  3:  { label: 'The Expressive Artist',       traits: ['Creative','Charismatic','Verbal','Optimistic','Social'],
-        text: `Your Name Number is 3 — your name carries the energy of expression and creative intelligence. You have a natural eloquence; words, ideas, and images flow through you in ways that engage and lift others.\n\nYou were designed to work with and for people: writing, speaking, teaching, designing — any domain where your creative warmth can fully express itself is your natural territory.\n\nYour growth is in sustained focus. The most brilliant creative minds are not those with the most ideas but those who chose one idea and went all the way into it.` },
-
-  4:  { label: 'The Systems Builder',         traits: ['Precise','Organised','Reliable','Logical','Enduring'],
-        text: `Your Name Number is 4 — your name carries the energy of precision, organisation, and follow-through. You have a rare capacity for turning vision into plan, and plan into tangible result.\n\nYou excel in fields requiring structure, reliability, and long-term thinking: engineering, finance, project management, or any work that demands the meticulous commitment most people cannot sustain.\n\nYour growth is in allowing yourself to dream slightly bigger than the plan allows. The greatest builders were also, always, bold.` },
-
-  5:  { label: 'The Versatile Communicator',  traits: ['Adaptive','Persuasive','Dynamic','Multi-talented','Progressive'],
-        text: `Your Name Number is 5 — your name carries the energy of adaptability and natural persuasion. You have an innate ability to meet people where they are and communicate across very different audiences with equal ease.\n\nYou are built for variety: sales, marketing, journalism, politics, or any field where the ability to shift, persuade, and connect is valued above narrow consistency.\n\nYour growth is in depth. The 5 Name Number who adds genuine expertise to natural versatility becomes not just interesting, but irreplaceable.` },
-
-  6:  { label: 'The Devoted Healer',          traits: ['Caring','Responsible','Aesthetic','Healing','Community'],
-        text: `Your Name Number is 6 — your name carries the energy of nurturing and the creation of beauty. You have an instinct for what people need to feel safe and cared for, and an aesthetic sensibility that brings warmth to any environment.\n\nYou thrive in service-oriented fields: medicine, counselling, social work, teaching, interior design — any role where your love is the engine.\n\nYour growth is in recognising that your own wellbeing is part of the service you offer. A healer who neglects themselves cannot heal others.` },
-
-  7:  { label: 'The Analytical Mystic',       traits: ['Investigative','Scholarly','Discerning','Refined','Independent'],
-        text: `Your Name Number is 7 — your name carries the energy of deep analysis and quiet wisdom. You have an unusual combination: the precision of the scientist and the perception of the mystic.\n\nYou excel in research, philosophy, psychology, technology, or spiritual study — any domain where the reward is not external approval but the private thrill of genuine understanding.\n\nYour growth is in sharing what you find. Knowledge kept only to yourself is potential unrealised. The world is waiting for what you have discovered in solitude.` },
-
-  8:  { label: 'The Executive',               traits: ['Authoritative','Strategic','Efficient','Business-minded','Resilient'],
-        text: `Your Name Number is 8 — your name carries the energy of executive power and strategic intelligence. You were born understanding leverage: how systems work, where value is created, how to position for maximum impact.\n\nYou are built for leadership at scale: business, law, finance, real estate — any domain where big-picture thinking and precise execution can be fully deployed.\n\nYour growth is in the human dimension of power. The most enduring legacies are built not on strategy alone but on the loyalty of people who were genuinely seen and developed.` },
-
-  9:  { label: 'The Wise Counsellor',         traits: ['Humanitarian','Philosophical','Tolerant','Universal','Artistic'],
-        text: `Your Name Number is 9 — your name carries the energy of wisdom, compassion, and universal perspective. You were born with an instinctive understanding of the human condition — its pain, its beauty, and its potential.\n\nYou are drawn to work that transcends the personal: the arts, education, humanitarian work, philosophy — anywhere your gifts serve something that outlasts you.\n\nYour growth is in allowing yourself to receive as generously as you give. The 9 Name Number who learns to be served without guilt discovers that love is not finite — it only grows when it flows in both directions.` },
-
-  11: { label: 'The Intuitive Visionary',     traits: ['Inspirational','Prophetic','Spiritual','Creative','Illuminating'],
-        text: `Your Name Number is the Master 11 — your name carries a frequency that operates on an elevated level. You have an unusual combination of creative brilliance and spiritual sensitivity, an inner antenna that receives signals others cannot.\n\nYou are here to inspire at a larger scale: through art, teaching, spiritual guidance, or any creative work that opens hearts and expands people's sense of what is possible.\n\nThe gift and the challenge are the same: heightened sensitivity in a world that is often too loud. Learn to regulate your environment, and your capacity to inspire becomes unlimited.` },
-
-  22: { label: 'The Visionary Builder',       traits: ['Practical Idealist','Architect','Large-scale','Grounded','Transformative'],
-        text: `Your Name Number is the Master 22 — your name carries the rarest of energies: the ability to hold a vast vision and build it into something real. You combine big-picture thinking with the practical discipline of a master builder.\n\nYou are here to create things that change how people live — institutions, systems, communities that carry your blueprint long after you are gone.\n\nThe scale of your gifts can feel like pressure. Begin with what is in front of you. Every great structure starts with a single, carefully placed stone.` },
+const NAME_LABEL = {
+  1:'Natural Leader', 2:'Collaborator', 3:'Expressive Artist', 4:'Systems Builder',
+  5:'Versatile Communicator', 6:'Devoted Healer', 7:'Analytical Mystic',
+  8:'The Executive', 9:'Wise Counsellor', 11:'Inspired Messenger', 22:'Visionary Builder',
 };
 
-// ══════════════════════════════════════════════════════════════
-//  SOUL URGE (1–9)
-//  Vowels of name. Inner hunger, what the soul truly desires.
-// ══════════════════════════════════════════════════════════════
-const SOUL_URGE = {
-  1: { label: 'Craves Autonomy',       text: `At your core, you crave independence and the freedom to do things your way. Your soul is most at peace when you are the author of your own story — when no one is waiting to approve your next move.\n\nYou are driven by a need to achieve something entirely yours. Not to prove yourself to others, but to satisfy a private inner standard you hold higher than anyone else would dare.\n\nWhat brings you joy is leading. What drains you is feeling dependent, overlooked, or constrained by others' smaller vision.` },
-  2: { label: 'Craves Connection',     text: `At your core, you crave deep, reciprocal connection. Your soul is nourished by relationships where you are truly seen — where what you give is genuinely returned.\n\nYou are motivated by harmony. Not the shallow kind that avoids all friction, but the deep kind that emerges when two people actually hear each other. This is what you are always reaching for.\n\nWhat brings you joy is belonging. What drains you is loving someone who cannot quite meet you where you are.` },
-  3: { label: 'Craves Expression',     text: `At your core, you crave the freedom to express. Your soul is not content to simply receive the world — it needs to respond to it, shape it, add something that was not there before.\n\nYou are most alive when you are making something: a conversation that sparks, a piece of writing, a room that feels beautiful, a laugh that breaks tension. The medium matters less than the act of creating itself.\n\nWhat brings you joy is creative freedom. What drains you is a life so scheduled that spontaneity becomes impossible.` },
-  4: { label: 'Craves Security',       text: `At your core, you crave solid ground. Your soul is not asking for luxury — it is asking for stability: a home that feels safe, work that means something, relationships built on genuine trust.\n\nYou are motivated by the desire to build something real. Not a performance of success, but the actual thing: a business that works, a family that holds together, a reputation earned through consistent integrity.\n\nWhat brings you joy is the feeling of things in their right place. What drains you is chaos, broken commitments, and environments that shift without warning.` },
-  5: { label: 'Craves Freedom',        text: `At your core, you crave freedom and the thrill of the new. Your soul is not built for sameness — it needs variety, movement, sensation, and the feeling of a horizon that keeps expanding.\n\nYou are motivated by experience itself. You want to have lived, not just to have existed. You want stories worth telling, and a life that surprises you.\n\nWhat brings you joy is discovery. What drains you is routine without meaning, or a life that stopped asking questions.` },
-  6: { label: 'Craves Harmony & Love', text: `At your core, you crave love — not just romantic love, but the full, rich experience of belonging and being genuinely needed. Your soul is most at peace when the people you love are well.\n\nYou are motivated by devotion. You want to be the steady presence in a shifting world. In Indian family life, this is the quality that holds everything together — and you feel it as a calling.\n\nWhat brings you joy is a home that feels like sanctuary. What drains you is discord you cannot resolve, or love that goes unacknowledged.` },
-  7: { label: 'Craves Understanding',  text: `At your core, you crave understanding — not information, but genuine insight. Your soul is not satisfied with knowing what; it needs to know why, and then the why behind the why.\n\nYou are motivated by the pursuit of truth beneath the surface of every experience. This is Ketu's influence felt at the soul level: a pull toward the spiritual, the philosophical, the genuinely mysterious.\n\nWhat brings you joy is the private thrill of an idea clicking into place, or a conversation that goes somewhere neither person expected. What drains you is noise, pretence, and compulsory small talk.` },
-  8: { label: 'Craves Achievement',    text: `At your core, you crave achievement and the tangible evidence of your own power. Your soul is most alive when it is working toward something significant — a goal worthy of your full capacity.\n\nYou are motivated by impact. Not just comfort, but consequence — the knowledge that what you build matters, that you changed something in the world by being in it.\n\nWhat brings you joy is mastery: the moment years of effort produce undeniable results. What drains you is mediocrity — especially your own.` },
-  9: { label: 'Craves Purpose',        text: `At your core, you crave meaning — not just personal fulfilment but the deep satisfaction of knowing your life served something beyond itself. Your soul is not content with private success; it wants to contribute.\n\nYou are motivated by compassion so broad that you sometimes feel it as a weight — a sense of responsibility to something larger than your own story.\n\nWhat brings you joy is the moment your work touches someone genuinely — not applause, but the quiet recognition that something you gave truly mattered.` },
+const SOUL_URGE_DESC = {
+  1:`craving autonomy and the freedom to do things entirely your way`,
+  2:`craving deep reciprocal connection — to be truly seen by the people who matter`,
+  3:`craving the freedom to express — your soul needs to respond to the world, to add something that was not there before`,
+  4:`craving solid ground — not luxury, but stability, integrity, and things built to last`,
+  5:`craving freedom and the thrill of the new — your soul is not built for sameness`,
+  6:`craving love in its fullest expression — belonging, being genuinely needed, making a home`,
+  7:`craving understanding — not information, but genuine insight into why things are the way they are`,
+  8:`craving achievement and the tangible evidence of your own power`,
+  9:`craving meaning — the deep satisfaction of knowing your life served something beyond itself`,
+  14:`craving freedom so intensely it carries a karmic weight. The compound 14 means this craving is your deepest lesson as much as your deepest desire`,
 };
 
-// ══════════════════════════════════════════════════════════════
-//  PERSONALITY (1–9)
-//  Consonants of name. How the world perceives you.
-// ══════════════════════════════════════════════════════════════
-const PERSONALITY = {
-  1: { label: 'Confident & Decisive',  text: `To the world, you appear confident, decisive, and quietly in charge. People sense before you have spoken that you have already thought the situation through — and they find this reassuring.\n\nYour presence communicates competence without effort. Even in unfamiliar territory, you project the calm that others interpret as experience.\n\nThis first impression can occasionally feel intimidating. When you soften it with warmth, your natural authority becomes magnetic rather than simply commanding.` },
-  2: { label: 'Warm & Approachable',   text: `To the world, you appear warm, considerate, and genuinely interested in the people around you. You have a gift for making others feel noticed — a moment of real attention that quietly says: I see you.\n\nPeople trust you quickly because you do not seem to be performing. Your warmth is effortless because, for you, it largely is.\n\nThe impression you make can cause people to underestimate your strength. The gentleness they see is real, but it is not the whole picture. Let them discover your steel when the moment calls for it.` },
-  3: { label: 'Vibrant & Engaging',    text: `To the world, you appear vibrant, expressive, and genuinely enjoyable to be around. People brighten in your presence — not because you perform, but because your natural energy is contagious.\n\nYou have a gift for conversation: you know how to draw people out, find humour in unexpected places, and make the ordinary feel interesting.\n\nThe impression creates an expectation that you are always "on." Give yourself permission to be quiet sometimes. The people who matter will not confuse your still moments with absence.` },
-  4: { label: 'Steady & Reliable',     text: `To the world, you appear steady, competent, and dependable — the kind of person others instinctively call when they need the job done. You do not broadcast your capabilities; you demonstrate them.\n\nYour manner is grounded and direct. You say what you mean and follow through on what you promise. In a culture of overcommitment and underdelivery, this sets you apart.\n\nThe impression can feel cooler than you intend. Warmth and precision can coexist. When people see the care behind your competence, they stop just trusting you — they become loyal to you.` },
-  5: { label: 'Dynamic & Interesting', text: `To the world, you appear dynamic, interesting, and impossible to fully predict — which makes you genuinely compelling to watch and even more compelling to know.\n\nYou move through social situations with a lightness others find refreshing. You are equally at ease in a formal boardroom and a chai stall conversation — this adaptability reads as real confidence.\n\nThe impression is energising, but it can feel temporary. People wonder if you will stay. Showing your depth — not just your range — is what converts admiration into trust.` },
-  6: { label: 'Warm & Caring',         text: `To the world, you appear warm, caring, and genuinely invested in the people around you. People sense that your interest is not social performance — it is actual attention.\n\nYou often come across as slightly more composed than everyone else in the room — not because you try harder, but because your aesthetic sense extends naturally to how you present yourself.\n\nThe impression attracts people who need more than you have to give. Being warm and boundaried simultaneously is your ongoing social refinement — when you manage it, others admire not just your care but your wisdom.` },
-  7: { label: 'Mysterious & Refined',  text: `To the world, you appear intelligent, private, and slightly unknowable — which creates a quiet intrigue that draws people toward you even as you maintain a slight distance.\n\nYou observe far more than you reveal. People often sense you have assessed the situation before they finished explaining it — and they are usually right.\n\nThe impression can feel cool or distant to those who do not know you. When you decide to let someone in — even a little — the effect is powerful. The contrast between your usual reserve and your moments of openness is one of your most compelling qualities.` },
-  8: { label: 'Powerful & Capable',    text: `To the world, you appear powerful, competent, and worth paying attention to. You carry yourself with a quiet authority that communicates: I have thought this through, and I am not guessing.\n\nYou present yourself in ways that project success — not as performance, but because your standards extend naturally into your appearance and environment.\n\nThe impression opens doors others find closed. The challenge is ensuring what is behind the door matches what is on the front — not because you lack substance, but because your exterior is so polished that people hold you to the very highest standard.` },
-  9: { label: 'Compassionate & Wise',  text: `To the world, you appear compassionate, broad-minded, and in possession of a gentle wisdom that feels rare. People often feel, in your company, that they are being seen more generously than they see themselves.\n\nYou carry yourself with a quiet grace that comes from genuinely not needing to compete. You are already where you are, and that settledness is visible.\n\nPeople sometimes mistake your acceptance for agreement, or your gentleness for a lack of convictions. When the moment calls for it, do not hesitate to let your depth show.` },
+const PERSONALITY_DESC = {
+  1:`confident and decisive — someone who has already thought through the situation before others finish explaining it`,
+  2:`warm, considerate, and genuinely interested in the people around you`,
+  3:`vibrant, expressive, and genuinely enjoyable to be around — people brighten in your presence`,
+  4:`steady, competent, and dependable — the person others call when they need the job done`,
+  5:`dynamic, interesting, and impossible to fully predict — which makes you compelling to know`,
+  6:`warm, caring, and genuinely invested in the people around you`,
+  7:`intelligent, private, and slightly unknowable — creating a quiet intrigue that draws people toward you`,
+  8:`powerful, competent, and worth paying attention to — you carry quiet authority`,
+  9:`compassionate, broad-minded, and possessed of a gentle wisdom that feels rare`,
 };
 
-// ══════════════════════════════════════════════════════════════
-//  MATURITY NUMBER (1–9)
-//  Psychic + Destiny reduced. Who you are still becoming.
-// ══════════════════════════════════════════════════════════════
-const MATURITY = {
-  1: { label: 'Maturing into Sovereignty', text: `As you move through the second half of your life, you will feel an increasing pull toward genuine independence and self-determination. The approval of others will matter progressively less; your own clear sense of direction will matter more.\n\nIn your mature years, you will find the courage to build something entirely, unapologetically yours — not because you have become selfish, but because you have finally become honest.` },
-  2: { label: 'Maturing into Partnership', text: `As you grow into maturity, your relationships become the central and most rewarding theme. Partnerships — romantic, professional, creative — will be where your greatest growth and satisfaction live.\n\nThe older you get, the more you will value depth over breadth, presence over productivity, and genuine connection over impressive achievement. This wisdom, fully embraced, transforms everything.` },
-  3: { label: 'Maturing into Expression',  text: `As you grow into maturity, your creative gifts will deepen and find their truest form. The scattered creativity of earlier years will focus into something more precise and more powerful.\n\nYou may feel called to share what you have learned — to teach, to write, to create in ways that leave something behind. This impulse is worth following fully.` },
-  4: { label: 'Maturing into Mastery',     text: `As you grow into maturity, you will find deep satisfaction in mastery and the tangible results of sustained effort. The structures you have spent a lifetime building — in work, in family, in character — will show their durability.\n\nWhat you built slowly, carefully, and without shortcuts will outlast the quick constructions of others. This is your vindication and your legacy.` },
-  5: { label: 'Maturing into Freedom',     text: `As you grow into maturity, your relationship with freedom will evolve. The restless seeking of earlier years will soften into something more deliberate — a freedom chosen rather than chased.\n\nYou may find that you have all the adventure you need in the depth of a single day, a single place, a single relationship fully explored. This is not limitation — it is the freedom of someone who no longer needs to run in order to feel free.` },
-  6: { label: 'Maturing into Love',        text: `As you grow into maturity, love in its fullest expression becomes your primary domain. Your relationships, your home, your community — these will be where you find your deepest meaning and your greatest joy.\n\nGiving love without condition and receiving it without guilt — when you master this balance, you become one of the rarest things in the world: a person in whose presence others feel genuinely at home.` },
-  7: { label: 'Maturing into Wisdom',      text: `As you grow into maturity, the searching quality of your earlier years will deepen into wisdom. The questions you have been asking your whole life will begin to reveal their answers — not all at once, but in a steady accumulation of clarity.\n\nYour inner life becomes your greatest resource. The depth cultivated in solitude becomes the very quality that makes you invaluable to others who are still searching.` },
-  8: { label: 'Maturing into Power',       text: `As you grow into maturity, your relationship with power, abundance, and achievement comes into its fullest expression. What you were always capable of will finally have the platform it deserves.\n\nThe wisdom you have accumulated about how the world actually works becomes your greatest asset. Use it not just to build for yourself, but to build for others. This is where your legacy is made.` },
-  9: { label: 'Maturing into Service',          text: `As you grow into maturity, your sense of universal compassion and service deepens into your primary mode of being. Personal ambitions give way to something larger and more generous.\n\nYou will begin to give your gifts most freely — not because you expect less in return, but because you no longer need the return. This is the mature expression of a life well-lived: giving from fullness, not from need.` },
-  11: { label: 'Maturing into Inspired Wisdom', text: `Your Maturity Number is the Master 11 — one of the rarest possible outcomes in a Chaldean chart. As you move through the second half of your life, your sensitivity and visionary capacity will deepen into something unmistakable: the ability to inspire others simply by being fully yourself.\n\nThe 11 Maturity often arrives quietly — not as a dramatic shift but as a gradual settling into your own inner knowing. What felt like a curse in earlier years (feeling everything too deeply, sensing what others miss) reveals itself as the very instrument of your greatest influence.` },
-  22: { label: 'Maturing into Mastery at Scale', text: `Your Maturity Number is the Master 22 — the most powerful builder's energy in Chaldean numerology. As you move through the second half of your life, you will feel an increasing pull toward projects and structures that exist beyond personal ambition — things that are built for others, for the future, for something that outlasts you.\n\nThe 22 Maturity is the energy of the elder statesperson, the institution-builder, the person whose most significant work comes after the world would expect them to slow down. It does not slow down. It finally finds its full scale.` },
-  33: { label: 'Maturing into Unconditional Love', text: `Your Maturity Number is the Master 33 — the most selfless of all maturity energies. As you move through the second half of your life, your calling will become increasingly clear: to serve, to teach, to love at a scale that transcends the personal.\n\nThe 33 Maturity is not about what you accumulate or achieve — it is about what you freely give. The older you become, the more you will discover that your greatest fulfilment comes not from receiving but from the moment your presence genuinely helps someone find their way.` },
+const MATURITY_LABEL = {
+  1:'Maturing into Sovereignty', 2:'Maturing into Partnership', 3:'Maturing into Expression',
+  4:'Maturing into Mastery', 5:'Maturing into Freedom', 6:'Maturing into Love',
+  7:'Maturing into Wisdom', 8:'Maturing into Power', 9:'Maturing into Service',
+  11:'Maturing into Inspired Wisdom', 22:'Maturing into Mastery at Scale', 33:'Maturing into Unconditional Love',
 };
 
-// ══════════════════════════════════════════════════════════════
-//  PERSONAL YEAR (1–9)
-//  Current year cycle energy.
-// ══════════════════════════════════════════════════════════════
 const PERSONAL_YEAR = {
-  1: { label: 'Year of New Beginnings', text: `This is a Personal Year 1 for you — a year of new beginnings and the planting of seeds that will grow for the next nine years. What you initiate now carries unusual momentum.\n\nThis year rewards courage. Begin the project, launch the idea, move toward the thing you have been circling. A Year 1 rewards action and punishes hesitation.\n\nWatch for: the temptation to wait until everything is perfect. It never is. Begin anyway.` },
-  2: { label: 'Year of Partnership',    text: `This is a Personal Year 2 — a year of relationships, patience, and the quiet work of building trust. After the action of Year 1, this year asks you to slow down and tend to connections.\n\nCollaboration is favoured. Partnerships you invest in now will prove their value over years ahead. Listen more than you speak.\n\nWatch for: frustration at the slower pace. Year 2 is not passive — it is the deep work of laying relational foundations that Year 1's seeds need to grow.` },
-  3: { label: 'Year of Expression',     text: `This is a Personal Year 3 — a year of creativity, social expansion, and the joy of expressing who you are. Opportunities arrive through people — new connections, creative collaborations, conversations that change direction.\n\nSay yes more than you say no. This is a year to enjoy.\n\nWatch for: scattered energy. The abundance of Year 3 can lead to overcommitment. Keep a few important projects at the centre while enjoying the expansion.` },
-  4: { label: 'Year of Building',       text: `This is a Personal Year 4 — a year of hard work, structure, and the satisfaction of building something real. This is not a year for shortcuts. It rewards discipline and the willingness to do unglamorous work.\n\nWhat you build with integrity this year will last.\n\nWatch for: rigidity and overwork. The structures that last are built by people who know when to rest.` },
-  5: { label: 'Year of Change',         text: `This is a Personal Year 5 — a year of change, freedom, and unexpected developments. Life is ready to move, and it will — whether or not you planned for it.\n\nThis year favours flexibility and a willingness to let the unexpected in. Embrace the instability — it is carrying you somewhere important.\n\nWatch for: recklessness. The energy of freedom is real, but not all changes are improvements. Choose your risks consciously.` },
-  6: { label: 'Year of Responsibility', text: `This is a Personal Year 6 — a year centred on home, relationships, family, and responsibility. Life is asking you to settle, nurture, and attend to what genuinely matters.\n\nRelationship themes come to the foreground: deepening commitments, resolving tensions, reimagining what home and family mean to you.\n\nWatch for: over-giving. Year 6 attracts those who need your care. Give freely, but not at the expense of your own wellbeing.` },
-  7: { label: 'Year of Reflection',     text: `This is a Personal Year 7 — a year of inner work, reflection, and the kind of self-understanding that only comes from genuine solitude. Life is offering you space.\n\nThis is not a year for aggressive external expansion. It is a year for reading, thinking, and attending to the inner world that your outer life runs on.\n\nWatch for: isolation and withdrawal. Reflection is good; retreat from life is not. Stay present to the people who matter, even as you go deep.` },
-  8: { label: 'Year of Achievement',    text: `This is a Personal Year 8 — a year of achievement, financial focus, and tangible results. After the inner work of Year 7, you are ready to act, and the world is ready to reward you.\n\nOpportunities for advancement, financial gain, and recognition are more available in a Year 8 than almost any other year.\n\nWatch for: pursuing achievement at the expense of the people around you. Success without integrity is hollow. Build both.` },
-  9: { label: 'Year of Completion',     text: `This is a Personal Year 9 — a year of endings, completion, and releasing what has served its purpose. You are approaching the end of a nine-year cycle.\n\nFinish, close, and clear. Projects, relationships, habits that no longer fit are asking to be released. Trust the process of completion.\n\nWatch for: clinging to what is ending. The grace of a Year 9 is proportional to your willingness to release. Let go generously, and your next Year 1 arrives with extraordinary clarity.` },
+  1:{ label:'New Beginnings',  tip:`Initiate. Plant seeds. Begin the thing you have been circling. Year 1 rewards action and punishes hesitation.` },
+  2:{ label:'Partnership',     tip:`Slow down. Tend to connections. Collaborate rather than push alone. The foundations built now carry the next seven years.` },
+  3:{ label:'Expression',      tip:`Socialise, create, communicate, enjoy. Opportunities arrive through people. Say yes more than you say no.` },
+  4:{ label:'Building',        tip:`Hard work and structure. Not glamorous — but what you build with integrity this year will last.` },
+  5:{ label:'Change',          tip:`Embrace flexibility. Change is coming whether or not you planned for it. The instability is carrying you somewhere important.` },
+  6:{ label:'Responsibility',  tip:`Home, relationships, and love come to the foreground. Tend to what matters. Give freely but not at the expense of your own wellbeing.` },
+  7:{ label:'Reflection',      tip:`Go inward. Read, think, learn. This is not a year for aggressive external expansion.` },
+  8:{ label:'Achievement',     tip:`Act boldly. Financial and professional opportunities are more available now than in almost any other year.` },
+  9:{ label:'Completion',      tip:`Finish, close, and release. The grace of Year 9 is proportional to your willingness to let go.` },
 };
 
-// ══════════════════════════════════════════════════════════════
-//  PLANES OF EXPRESSION
-// ══════════════════════════════════════════════════════════════
-const PLANE_DOMINANT = {
-  mental:    `Your chart shows a dominant Mental plane — you lead with your intellect. You process the world through analysis, ideas, and logic, and your best decisions come after careful, systematic thinking. The risk is over-analysis: living so much in the mind that you delay action or disconnect from your emotions.`,
-  physical:  `Your chart shows a dominant Physical plane — you lead with action and practicality. You are at your best when building, doing, and producing tangible results. You trust what you can touch and measure, and others trust you because you deliver. The risk is neglecting the inner world; results without reflection can lead you in the wrong direction.`,
-  emotional: `Your chart shows a dominant Emotional plane — you lead with feeling. Your empathy and sensitivity are your greatest assets; you understand people and situations at a depth others miss entirely. The risk is making decisions from the heart when the situation also calls for the head.`,
-  intuitive: `Your chart shows a dominant Intuitive plane — you lead with inner knowing. You sense things before they happen, read between lines others cannot see, and navigate by a compass that defies rational explanation. The risk is difficulty communicating your insight to others who need logical explanation before they can trust a direction.`,
+const KARMIC_DEBT_TEXT = {
+  13:`The karmic compound 13 in your chart suggests a soul that may have avoided discipline in a previous cycle. Every time you complete something difficult in this life, you settle a karmic debt and build genuine mastery simultaneously.`,
+  14:`The karmic compound 14 carries the energy of freedom that must be earned through responsibility. Your deepest craving and your deepest lesson live in the same place — this is not accidental, it is precisely designed.`,
+  16:`The karmic compound 16 carries the energy of the fall of ego and the rebuilding of something more genuine. Your most profound growth arrives through humbling experiences — not as punishment, but as the universe ensuring your gifts are built on wisdom rather than pride.`,
+  19:`The karmic compound 19 carries the energy of independence that must be balanced with genuine care for others. True strength is not self-sufficiency alone — it is the courage to need and be needed in return.`,
 };
 
-const PLANE_WEAKEST = {
-  mental:    `Your least developed plane is the Mental — a reminder to slow down and think before acting. When logic and analysis feel like obstacles, that is precisely when they are most needed.`,
-  physical:  `Your least developed plane is the Physical — a reminder that ideas must eventually become actions. Inspiration unrealised is just a dream. The world responds to what you build, not only to what you feel or think.`,
-  emotional: `Your least developed plane is the Emotional — a reminder to check in with how you and others feel, not just what you or they think. The most precise decisions still carry human consequences.`,
-  intuitive: `Your least developed plane is the Intuitive — a reminder to pause and listen to the quiet signal beneath the noise. Not everything worth knowing can be found by analysis or effort alone.`,
-};
-
-// ══════════════════════════════════════════════════════════════
-//  KARMIC DEBT TEXT
-// ══════════════════════════════════════════════════════════════
-const KARMIC_DEBT = {
-  13: `The karmic compound 13 tends to suggest a soul that may have avoided hard work or discipline in a previous cycle. In this life, it often manifests as a tendency to resist structure — until the moment you discover that mastery is not a prison but a liberation. Every time you complete something difficult, you are paying a debt forward with compound interest.`,
-  14: `The karmic compound 14 tends to suggest a soul that may have overindulged in freedom or personal liberty in a previous cycle. In this life, the invitation is to embrace responsible freedom — to discover that the deepest adventures belong to those who have also learned restraint.`,
-  16: `The karmic compound 16 tends to suggest a soul carrying themes of ego and the fall of pride. In this life, your most profound growth often arrives through humbling experiences — not as punishment, but as the universe ensuring that your considerable gifts are built on genuine wisdom rather than brittle certainty.`,
-  19: `The karmic compound 19 tends to suggest a soul that may have misused power or independence at the expense of others. In this life, the lesson is interdependence: discovering that true strength is not self-sufficiency alone, but the courage to need and be needed in return.`,
-};
-
-// ══════════════════════════════════════════════════════════════
-//  HIDDEN PASSIONS
-// ══════════════════════════════════════════════════════════════
-const HIDDEN_PASSION_TEXT = {
-  1: 'a drive for leadership and originality that runs deeper than most people around you realise',
-  2: 'a hunger for genuine partnership and harmony that shapes every significant choice you make',
-  3: 'a creative restlessness that never fully quiets — an insistence on expressing yourself that cannot be suppressed for long',
-  4: 'a deep need to build things that last, and a private dissatisfaction with anything that is merely temporary',
-  5: 'a hunger for experience and freedom that makes conventional paths feel like a slow erosion',
-  6: 'a devotion to love and beauty so fundamental that it colours every relationship and every space you inhabit',
-  7: 'a quiet obsession with truth and understanding that makes surface-level answers feel like an insult to your intelligence',
-  8: 'an ambition for impact and mastery that rarely sleeps — and a private knowledge that you are capable of far more than your current situation reflects',
-  9: 'a compassion so broad and deep that you sometimes feel it as a weight — a sense of responsibility to something larger than your own story',
-};
-
-// ══════════════════════════════════════════════════════════════
-//  MASTER NUMBER OPENER
-// ══════════════════════════════════════════════════════════════
-const MASTER_NUMBER_OPENER = {
-  11: `There is something rare in your chart that announces itself immediately: a Master Number 11. In Chaldean numerology, this is not ordinary territory. The 11 marks a soul that carries both exceptional sensitivity and an unusual capacity to inspire — often without fully understanding why people are drawn to them the way they are.`,
-  22: `Your chart opens with something extraordinary: a Master Number 22 — the rarest of the master numbers in Chaldean tradition. It marks a soul with both the vision to see what could be and the practical power to make it real. You are not here just to achieve — you are here to build things that outlast you.`,
-  33: `Your chart carries the most selfless of the master numbers: 33. This number appears so rarely that many numerologists go their entire practice without seeing it in its pure form. It marks a soul whose calling is not personal success but something far larger — a life oriented toward love, teaching, and healing at scale.`,
-};
-
-// ══════════════════════════════════════════════════════════════
-//  BUILD 8-CARD RESPONSE
-// ══════════════════════════════════════════════════════════════
+// ─────────────────────────────────────────────────────────────
 function buildCards(profile) {
 
-  // ── Resolve all field names (Chaldean schema v3) ──────────
   const {
-    name_used,
-    psychic_number,
-    psychic_compound,
-    destiny_number,
-    destiny_compound,
-    name_number,
-    name_compound,
-    soul_urge_number,
-    soul_urge_compound,
-    personality_number,
-    personality_compound,
-    maturity_number,
-    maturity_compound,
-    power_number,
-    life_path_number,
+    name_used, dob_fmt,
+    psychic_number, psychic_compound,
+    destiny_number, destiny_compound,
+    name_number, name_compound,
+    soul_urge_number, soul_urge_compound,
+    personality_number, personality_compound,
+    maturity_number, maturity_compound,
+    power_number, power_compound,
+    ruling_planet, pd_combination,
     personal_year_number,
-    ruling_planet,
-    pd_combination,
-    master_numbers_found,
-    karmic_debt_numbers,
-    karmic_lessons,
-    hidden_passions,
-    missing_numbers,
-    plane_mental_count    = 0,
-    plane_physical_count  = 0,
-    plane_emotional_count = 0,
-    plane_intuitive_count = 0,
-    dominant_plane        = 'mental',
-    current_pinnacle,
-    current_challenge,
-    has_karmic_debt,
-    pinnacle_1_end_age,
+    current_pinnacle, current_challenge,
+    pinnacle_1, pinnacle_1_end_age,
+    pinnacle_2, pinnacle_2_end_age,
+    pinnacle_3, pinnacle_4,
+    challenge_1, challenge_2, challenge_3, challenge_4,
+    cornerstone, capstone, first_vowel,
+    cornerstone_value, capstone_value, first_vowel_value,
+    hidden_passions, karmic_lessons, missing_numbers, subconscious_self,
+    has_karmic_debt, karmic_debt_numbers, karmic_debt_locations,
+    has_master_11, has_master_22, has_master_33, master_numbers_found,
+    dominant_plane,
+    plane_mental_count, plane_physical_count,
+    plane_emotional_count, plane_intuitive_count,
+    soul_expression_bridge, life_personality_bridge,
+    rational_thought_number, balance_number, essence_number,
+    physical_transit, mental_transit, spiritual_transit,
+    physical_transit_value, mental_transit_value, spiritual_transit_value,
+    current_life_period, life_period_2_end_age,
+    universal_year_number,
   } = profile;
 
-  // firstName from name_used (not profile.name)
-  const firstName = (name_used || '').trim().split(/\s+/)[0] || 'friend';
-
-  // Master numbers
-  const masterList    = Array.isArray(master_numbers_found) && master_numbers_found.length ? master_numbers_found : [];
-  const hasMaster     = masterList.length > 0;
-  const primaryMaster = masterList[0] || null;
-
-  // Karmic debt
+  const _parts    = (name_used || '').trim().split(/\s+/);
+  const firstName = (_parts[0] && _parts[0].length === 1 && _parts[1]) ? _parts[1] : (_parts[0] || 'friend');
+  const masterList     = Array.isArray(master_numbers_found) && master_numbers_found.length ? master_numbers_found : [];
+  const hasMaster      = masterList.length > 0;
   const karmicDebtList = Array.isArray(karmic_debt_numbers) && karmic_debt_numbers.length ? karmic_debt_numbers : [];
-  const hasKarmicDebt  = !!has_karmic_debt && karmicDebtList.length > 0;
+  const hasKarmic      = !!has_karmic_debt && karmicDebtList.length > 0;
+  const missingList    = Array.isArray(missing_numbers)  && missing_numbers.length  ? missing_numbers  : [];
+  const hiddenList     = Array.isArray(hidden_passions)  && hidden_passions.length  ? hidden_passions  : [];
+  const lessonList     = Array.isArray(karmic_lessons)   && karmic_lessons.length   ? karmic_lessons   : [];
+  const pyEntry        = PERSONAL_YEAR[personal_year_number] || { label:`Year ${personal_year_number}`, tip:'' };
+  const currentYear    = new Date().getFullYear();
+  const pdSame         = psychic_number === destiny_number;
 
-  // Karmic lessons / missing numbers
-  const karmicLessonsList  = Array.isArray(karmic_lessons)  && karmic_lessons.length  ? karmic_lessons  : [];
-  const hiddenPassionsList  = Array.isArray(hidden_passions) && hidden_passions.length ? hidden_passions : [];
-  const missingNumbersList  = Array.isArray(missing_numbers) && missing_numbers.length ? missing_numbers : [];
-
-  // Planes — normalise dominant_plane to lowercase for lookups
-  const dominantPlaneLower = (dominant_plane || 'mental').toLowerCase();
-  const planeCounts = {
-    mental:    plane_mental_count,
-    physical:  plane_physical_count,
-    emotional: plane_emotional_count,
-    intuitive: plane_intuitive_count,
-  };
-  // Find weakest plane (lowest non-zero count, or zero if all zero)
-  const sortedPlanes    = Object.entries(planeCounts).sort((a, b) => a[1] - b[1]);
-  const weakestPlaneLow = sortedPlanes[0][0];
-
-  // Table lookups using correct Chaldean field names
-  const psychicEntry   = PSYCHIC[psychic_number]         || {};
-  const destinyEntry   = DESTINY[destiny_number]         || {};
-  const nameEntry      = NAME_NUM[name_number]           || {};
-  const soulUrgeEntry  = SOUL_URGE[soul_urge_number]     || {};
-  const personalityEnt = PERSONALITY[personality_number] || {};
-  const maturityEntry  = MATURITY[maturity_number]       || {};
-  const personalYrEnt  = PERSONAL_YEAR[personal_year_number] || {};
-
-  // Compound helpers
-  const psychicHasCompound  = psychic_compound  && psychic_compound  !== psychic_number;
-  const destinyHasCompound  = destiny_compound  && destiny_compound  !== destiny_number;
-  const nameHasCompound     = name_compound     && name_compound     !== name_number;
-  const soulHasCompound     = soul_urge_compound && soul_urge_compound !== soul_urge_number;
-  const personalityHasComp  = personality_compound && personality_compound !== personality_number;
-
-  // ── CARD 1: Your Signature ─────────────────────────────────
-  let card1Body = '';
-  if (hasMaster && MASTER_NUMBER_OPENER[primaryMaster]) {
-    card1Body = MASTER_NUMBER_OPENER[primaryMaster];
-    card1Body += ` Combined with a Psychic Number of ${psychic_number} (${psychicEntry.label || ''}) — ruled by ${ruling_planet || 'your ruling planet'} — your chart carries an unusual tension between the visible self and the self that is still becoming. The path is not simple, but it is unmistakably yours.`;
+  // ── CARD 1 — Curiosity Hook ─────────────────────────────
+  let c1 = `Most people think numerology is just two numbers — your birth date and your name. ${firstName}, your complete Chaldean chart contains over 90 distinct numbers, each measuring a different dimension of who you are.\n\n`;
+  if (hasMaster) {
+    c1 += `Your chart opens with something rare: a Master Number ${masterList[0]} in your core numbers. In Chaldean numerology, master numbers appear in fewer than 8% of charts — and yours carries one in a significant position.\n\n`;
+  } else if (pdSame) {
+    c1 += `Your chart opens with a rare alignment: your Psychic Number and Destiny Number are both ${psychic_number}${ruling_planet ? ` — both ruled by ${ruling_planet}` : ''}. When the number you were born with and the number your life is moving toward are identical, the energy amplifies in every direction. This appears in roughly 3% of charts.\n\n`;
   } else {
-    const pdSame = psychic_number === destiny_number;
-    if (pdSame) {
-      card1Body = `There is a rare alignment in your chart that announces itself immediately: your Psychic Number and Destiny Number are both ${psychic_number}${psychicHasCompound ? ` (compound ${psychic_compound})` : ''} — ruled by ${ruling_planet || 'the same planet'}. When the number you were born with and the number you are moving toward are identical, the energy is amplified in every direction. This is not a neutral coincidence in Chaldean numerology — it is a signature.`;
-    } else {
-      card1Body = `Your chart opens with a specific combination that the Chaldean system recognises immediately: a Psychic Number ${psychic_number}${psychicHasCompound ? ` (compound ${psychic_compound})` : ''} — ${psychicEntry.label || ''}, ruled by ${ruling_planet || 'your ruling planet'} — meeting a Destiny Number ${destiny_number}${destinyHasCompound ? ` (compound ${destiny_compound})` : ''} — ${destinyEntry.label || ''}. These two numbers define the central tension and the central gift of your entire life: the person you are instinctively, and the person you are being asked to become.`;
-    }
-    card1Body += ` There is a quality in this combination — ${pd_combination || `${psychic_number}-${destiny_number}`} — that tends to produce someone who has always understood things slightly ahead of when they could fully explain them. This reading is an attempt to give language to what you have long already known.`;
+    c1 += `Your chart opens with the Psychic-Destiny combination ${pd_combination || `${psychic_number}-${destiny_number}`}. Every combination tells a different story about the central tension and gift of a life — and yours has a specific one worth understanding.\n\n`;
   }
+  c1 += `In the next 11 cards we will take you through the numbers that matter most — not just the obvious ones, but the ones that usually stay hidden: the letters governing your current year, the gap between your inner desires and outer expression, the karmic compounds that explain why certain patterns keep repeating.\n\nBy Card 11 you will understand why your chart is unlike anyone else's.`;
 
-  const card1 = {
-    card_number:   1,
-    title:         hasMaster ? `The Master Number` : `${firstName}'s Signature`,
-    subtitle:      hasMaster ? `A rare master number opens your chart` : `The combination that makes you unmistakably you`,
-    body:          card1Body,
-    accent_number: hasMaster ? primaryMaster : psychic_number,
-    accent_label:  hasMaster ? 'Master Number' : 'Psychic Number',
-  };
+  // ── CARD 2 — Psychic Number ─────────────────────────────
+  const pEntry = PSYCHIC[psychic_number] || {};
+  const c2 = pEntry.text
+    ? pEntry.text(firstName, psychic_number, ruling_planet, psychic_compound)
+    : `${firstName}, your Psychic Number is ${psychic_number}${psychic_compound&&psychic_compound!==psychic_number?` (compound ${psychic_compound})`:''}${ruling_planet?`, ruled by ${ruling_planet}`:''}.`;
 
-  // ── CARD 2: The Day You Were Born ─────────────────────────
-  const card2Body = (psychicEntry.text ||
-    `Your Psychic Number ${psychic_number}${psychicHasCompound ? ` (born on the ${psychic_compound}th)` : ''} — ${psychicEntry.label || ''} — is the most instinctive, unfiltered version of you. It existed before the world had a chance to teach you who to be. It is the energy you return to under pressure, and the gift you carry without effort.`);
+  // ── CARD 3 — Destiny Number ─────────────────────────────
+  const dEntry = DESTINY[destiny_number] || {};
+  const c3 = dEntry.text
+    ? dEntry.text(firstName, destiny_number, destiny_compound)
+    : `${firstName}, your Destiny Number is ${destiny_number}${destiny_compound&&destiny_compound!==destiny_number?` — compound ${destiny_compound}`:''}. This is the overarching direction of your entire life.`;
 
-  const card2 = {
-    card_number:   2,
-    title:         `The Day You Were Born`,
-    subtitle:      `Psychic Number ${psychic_number}${psychicHasCompound ? ` · Born the ${psychic_compound}th` : ''} · ${psychicEntry.label || ''}`,
-    body:          card2Body,
-    accent_number: psychic_number,
-    accent_label:  `Psychic Number`,
-  };
-
-  // ── CARD 3: Your Life's True Direction ────────────────────
-  const card3Body = (destinyEntry.text ||
-    `Your Destiny Number ${destiny_number}${destinyHasCompound ? ` (compound ${destiny_compound})` : ''} — ${destinyEntry.label || ''} — is the overarching current beneath everything you do. In Chaldean numerology, the Destiny is not who you are — it is who you are being asked to become. It shapes the kind of experiences that find you, and the kind of person you grow into through them.`);
-
-  const card3 = {
-    card_number:   3,
-    title:         `Your Life's True Direction`,
-    subtitle:      `Destiny Number ${destiny_number}${destinyHasCompound ? ` · Compound ${destiny_compound}` : ''} · ${destinyEntry.label || ''}`,
-    body:          card3Body,
-    accent_number: destiny_number,
-    accent_label:  `Destiny Number`,
-  };
-
-  // ── CARD 4: The Name You Carry ────────────────────────────
-  const nameText = nameEntry.text
-    ? nameEntry.text.split('\n\n')[0]
-    : `Your Name Number ${name_number}${nameHasCompound ? ` (compound ${name_compound})` : ''} — ${nameEntry.label || ''} — reveals the talents encoded in your daily-use name, the gifts you bring into every room without realising you are deploying them.`;
-
-  const soulText = soulUrgeEntry.text
-    ? soulUrgeEntry.text.split('\n\n')[0]
-    : `Your Soul Urge ${soul_urge_number}${soulHasCompound ? ` (compound ${soul_urge_compound})` : ''} — ${soulUrgeEntry.label || ''} — reveals what you privately hunger for beneath all that outer talent.`;
-
+  // ── CARD 4 — Name + Soul Urge ───────────────────────────
+  const suKey  = soul_urge_compound && [13,14,16,19].includes(soul_urge_compound) ? soul_urge_compound : soul_urge_number;
+  const suDesc = SOUL_URGE_DESC[suKey] || `driven by a deep inner hunger that your outer name does not always reveal`;
   const tensionPairs = new Set(['1-2','2-1','1-9','9-1','3-4','4-3','5-4','4-5','7-3','3-7','8-2','2-8']);
   const hasTension   = tensionPairs.has(`${name_number}-${soul_urge_number}`);
 
-  let card4Body = `${nameText} Meanwhile, your Soul Urge ${soul_urge_number}${soulHasCompound ? ` (compound ${soul_urge_compound})` : ''} — ${soulUrgeEntry.label || ''} — reveals a very different interior. ${soulText}`;
+  let c4 = `${firstName}, your Name Number is ${name_number}${name_compound&&name_compound!==name_number?` (compound ${name_compound})`:''} — ${NAME_LABEL[name_number] || `the energy of ${name_number}`}. This is what your daily-use name projects outward: the talent the world sees before you have explained yourself.\n\n`;
+  c4 += `But beneath that outer expression, your Soul Urge Number is ${soul_urge_number}${soul_urge_compound&&soul_urge_compound!==soul_urge_number?` (compound ${soul_urge_compound})`:''}. At your core you are ${suDesc}.\n\n`;
   if (hasTension) {
-    card4Body += ` The gap between your Name Number ${name_number} and Soul Urge ${soul_urge_number} tends to create someone who presents one face to the world while quietly wanting something quite different — a tension that may feel familiar, and that your full blueprint explores in precise detail.`;
+    c4 += `The gap between Name ${name_number} and Soul Urge ${soul_urge_number} creates a recognisable tension: you present one energy to the world while privately wanting something quite different. Many of your most significant choices can be traced back to this single dynamic.`;
   } else {
-    card4Body += ` In your case, what you show the world and what you privately crave move in the same direction — giving your actions an unusual coherence and authenticity that others find quietly magnetic.`;
+    c4 += `What you show the world and what you privately crave move in the same direction — giving your actions an unusual coherence and authenticity that others find quietly magnetic.`;
   }
 
-  const card4 = {
-    card_number:   4,
-    title:         `The Name You Carry`,
-    subtitle:      `Name Number ${name_number} meets Soul Urge ${soul_urge_number}`,
-    body:          card4Body,
-    accent_number: name_number,
-    accent_label:  `Name Number`,
-  };
+  // ── CARD 5 — Personality Number ────────────────────────
+  const persDesc = PERSONALITY_DESC[personality_number] || `someone whose outer presence carries the energy of ${personality_number}`;
+  const c5 = `${firstName}, your Personality Number is ${personality_number}${personality_compound&&personality_compound!==personality_number?` (compound ${personality_compound})`:''}.\n\nTo the world you appear ${persDesc}.\n\nThis is the mask — not in the deceptive sense, but the face you naturally present before people know you. Your Psychic Number ${psychic_number} is who you are privately. Your Personality Number ${personality_number} is who the world experiences first. The distance between them, and how consciously you navigate it, is one of the most telling patterns in your chart.`;
 
-  // ── CARD 5: How the World Sees You ────────────────────────
-  const card5Body = (personalityEnt.text ||
-    `Your Personality Number ${personality_number}${personalityHasComp ? ` (compound ${personality_compound})` : ''} — ${personalityEnt.label || ''} — shapes the first impression you make before you have said a single word. It is the energy others feel when you walk into a room, the outer layer of self that the world encounters first.`);
-
-  const card5 = {
-    card_number:   5,
-    title:         `How the World Sees You`,
-    subtitle:      `Personality Number ${personality_number} · ${personalityEnt.label || ''}`,
-    body:          card5Body,
-    accent_number: personality_number,
-    accent_label:  `Personality Number`,
-  };
-
-  // ── CARD 6: The Hidden Architecture (Planes + Cycles) ─────
-  const dominantText = PLANE_DOMINANT[dominantPlaneLower] || `Your dominant plane is ${dominant_plane}.`;
-  const weakestText  = PLANE_WEAKEST[weakestPlaneLow]     || `Your least active plane is ${weakestPlaneLow}.`;
-
-  let card6Body = `${dominantText} ${weakestText} The distribution across your four planes (Mental: ${plane_mental_count}, Physical: ${plane_physical_count}, Emotional: ${plane_emotional_count}, Intuitive: ${plane_intuitive_count}) shapes not just how you make decisions, but which problems you solve naturally and which ones quietly accumulate.`;
-  card6Body += ` Your Personal Year ${personal_year_number} — ${personalYrEnt.label || ''} — is also significant right now: ${personalYrEnt.text ? personalYrEnt.text.split('\n\n')[0] : `it governs the energy theme of this entire year of your life.`} Your full blueprint maps these timing cycles in precise detail.`;
-
-  const card6 = {
-    card_number:   6,
-    title:         `The Hidden Architecture`,
-    subtitle:      `Dominant: ${dominant_plane.charAt(0).toUpperCase() + dominant_plane.slice(1)} · Personal Year ${personal_year_number}`,
-    body:          card6Body,
-    accent_number: personal_year_number,
-    accent_label:  `Personal Year`,
-  };
-
-  // ── CARD 7: Shadows and Gifts ─────────────────────────────
-  let card7Body = '';
-  let card7AccentNum   = null;
-  let card7AccentLabel = null;
-
-  if (hasKarmicDebt) {
-    const debtNum  = karmicDebtList[0];
-    const debtText = KARMIC_DEBT[debtNum] || `Your karmic compound of ${debtNum} carries a specific invitation to deep growth — a doorway, not a burden.`;
-    card7Body        = debtText;
-    card7AccentNum   = debtNum;
-    card7AccentLabel = 'Karmic Compound';
-  } else if (karmicLessonsList.length > 0) {
-    card7Body = `Your chart shows karmic lessons around the energies of ${karmicLessonsList.join(', ')} — values that appear less frequently in your name, suggesting areas this lifetime tends to call you to develop rather than lean on naturally. These are not deficiencies; they are specific doors that life keeps knocking on, in different forms, until you open them.`;
-  } else if (hiddenPassionsList.length > 0) {
-    const passionDesc = hiddenPassionsList
-      .map(n => HIDDEN_PASSION_TEXT[n] || `a deep affinity with the energy of ${n}`)
-      .join('; and ');
-    card7Body = `Beneath the numbers your name and birth date declare openly, your chart carries hidden passions: ${passionDesc}. These are drives so fundamental they rarely surface as conscious goals — they simply shape every significant choice, whether or not you have ever named them.`;
-  } else {
-    card7Body = `The deeper layers of your chart reveal a remarkably balanced distribution of energy — which carries its own distinctive quality. Balanced charts tend to produce people who are genuinely difficult to read: versatile, adaptive, capable of moving through very different worlds with equal ease. This versatility is a gift, and it comes with a specific challenge.`;
+  // ── CARD 6 — Name Letter Patterns ──────────────────────
+  let c6 = `${firstName}, most readings stop at Name Number and Soul Urge. But in Chaldean numerology the individual letters of your name carry meanings that most numerologists never reach.\n\n`;
+  if (cornerstone) {
+    c6 += `Your Cornerstone is ${cornerstone} (Chaldean value ${cornerstone_value||'?'}) — the first letter of your name, revealing how you approach new beginnings and start things. `;
+    const cstoneMap = { R:'Value 2 — Moon energy. You start things by observing and listening before acting.', A:'Value 1 — Sun energy. You start things boldly and directly.', G:'Value 3 — Jupiter energy. You start things with enthusiasm and creative energy.', S:'Value 3 — you begin with expressive, communicative energy.', M:'Value 4 — Rahu energy. You start with structure and unconventional angles.', P:'Value 8 — Saturn energy. You start with seriousness and long-term thinking.' };
+    c6 += (cstoneMap[cornerstone] || `Value ${cornerstone_value||'?'} shapes how you initiate.`) + '\n\n';
+  }
+  if (capstone) {
+    c6 += `Your Capstone is ${capstone} (value ${capstone_value||'?'}) — the last letter, revealing how you complete things and close chapters. `;
+    const capMap = { D:'Value 4 — Rahu energy. You finish with structure and thoroughness. You are a completer.', A:'Value 1 — Sun energy. You finish with confidence and decisiveness.', D:'Value 4 — you finish with practical, enduring groundedness.', N:'Value 5 — Mercury energy. You finish by moving on and beginning the next thing.', R:'Value 2 — Moon energy. You close things gently and relationally.' };
+    c6 += (capMap[capstone] || `Value ${capstone_value||'?'} shapes how you finish.`) + '\n\n';
+  }
+  if (first_vowel) {
+    c6 += `Your First Vowel is ${first_vowel} (value ${first_vowel_value||'?'}) — the first vowel in your name, revealing your instinctive emotional response before the mind engages. `;
+    const fvMap = { U:'Value 6 — Venus energy. Your emotional first response is warm, caring, and oriented toward harmony and beauty.', A:'Value 1 — Sun energy. Your emotional first response is confident and action-oriented.', I:'Value 1 — Sun energy. Your inner emotional response is quietly self-directed.', E:'Value 5 — Mercury energy. Your emotional first response is curious and mentally alive.', O:'Value 7 — Ketu energy. Your inner emotional response is deep, private, and spiritually tinged.' };
+    c6 += (fvMap[first_vowel] || `Value ${first_vowel_value||'?'} — this shapes how you feel before you think.`);
   }
 
-  // Always add timing hook
-  card7Body += ` There are timing dimensions in your chart — your current Pinnacle ${current_pinnacle ? `(${current_pinnacle})` : ''}${pinnacle_1_end_age ? ` active until age ${pinnacle_1_end_age}` : ''}, your Challenge Number ${current_challenge || ''}, and the deeper cycle patterns — that exist in your full blueprint and speak precisely to where you are right now and where you are heading in the next one to three years.`;
+  // ── CARD 7 — Planes of Expression ──────────────────────
+  const totalLetters = (plane_mental_count||0)+(plane_physical_count||0)+(plane_emotional_count||0)+(plane_intuitive_count||0);
+  const pct = (n) => totalLetters ? Math.round((n||0)/totalLetters*100) : 0;
+  const domPlane = (dominant_plane||'mental').toLowerCase();
 
-  const card7 = {
-    card_number:   7,
-    title:         `Shadows and Gifts`,
-    subtitle:      hasKarmicDebt ? `A karmic compound as doorway to depth` : `The deeper currents beneath the surface`,
-    body:          card7Body,
-    accent_number: card7AccentNum,
-    accent_label:  card7AccentLabel,
-  };
+  let c7 = `${firstName}, in Chaldean numerology each letter of your name belongs to one of four planes — Mental, Physical, Emotional, or Intuitive. The distribution reveals which mode you naturally process the world through.\n\n`;
+  c7 += `Your name contains ${totalLetters} letters: ${plane_mental_count||0} Mental (${pct(plane_mental_count)}%), ${plane_physical_count||0} Physical (${pct(plane_physical_count)}%), ${plane_emotional_count||0} Emotional (${pct(plane_emotional_count)}%), ${plane_intuitive_count||0} Intuitive (${pct(plane_intuitive_count)}%).\n\n`;
+  const domDesc = { mental:`analysis, ideas, and intellectual understanding. Your best decisions come after careful thinking. The risk: living so much in the mind that action is perpetually deferred.`, physical:`action and tangible results. You trust what you can build and measure. The risk: neglecting the inner world that your outer results depend on.`, emotional:`feeling and empathy. You understand people at a depth others miss. The risk: making decisions from the heart when the head is also needed.`, intuitive:`inner knowing. You sense things before they happen. The risk: difficulty explaining your insights to others who need logic before they can trust a direction.` };
+  c7 += `Your dominant plane is ${domPlane.charAt(0).toUpperCase()+domPlane.slice(1)} — you process the world primarily through ${domDesc[domPlane] || 'your dominant mode.'}\n\n`;
+  if (subconscious_self !== undefined && subconscious_self !== null) {
+    c7 += `Your Subconscious Self number is ${subconscious_self} (scale of 1–8) — measuring how resourcefully you respond under pressure. ${subconscious_self>=6 ? 'You have most energy types encoded in your name, meaning you respond to crises with reasonable instinct and resourcefulness.' : subconscious_self>=4 ? 'You have several energy types available under pressure, but certain situations will expose the gaps.' : 'Fewer energy types are in your name — under extreme pressure some situations may find you without the instinctive tools to respond.'}`;
+  }
 
-  // ── CARD 8: What Lies Beneath (CTA card) ─────────────────
-  const card8Body = `This reading has traced the essential shape of your Chaldean chart — your Psychic Number ${psychic_number}, Destiny Number ${destiny_number}, Name Number ${name_number}, and the energies currently active in your life. But it has only traced the outline. Your Maturity Number ${maturity_number}${maturity_compound && maturity_compound !== maturity_number ? ` (compound ${maturity_compound})` : ''} — ${maturityEntry.label || ''} — describes who you are still in the process of becoming, and it carries some of the most personally relevant insights in your entire chart. Your current Pinnacle ${current_pinnacle ? `(${current_pinnacle})` : ''} speaks directly to the specific opportunities and pressures of this exact chapter. And the deeper analysis of your Psychic-Destiny combination ${pd_combination || `${psychic_number}-${destiny_number}`} — how these two ruling energies interact, where they create flow and where they create friction — is the quiet engine behind your most significant choices. If any part of this reading has felt true, your full blueprint will feel like finally reading the book that was written about you.`;
+  // ── CARD 8 — Hidden Passions + Karmic Lessons ──────────
+  let c8 = '';
+  if (hiddenList.length > 0) {
+    const hpDesc = { 1:'an almost compulsive drive toward leadership and independence', 2:'an extraordinary attunement to other people and a deep drive toward meaningful partnership', 3:'a creative restlessness that cannot be suppressed — the need to express is not a choice, it is a necessity', 4:'a deep compulsion to build things that last — temporary solutions feel genuinely painful', 5:'a hunger for experience and freedom that makes conventional paths feel like slow erosion', 6:'a devotion to love and beauty so fundamental it colours every relationship and every space you inhabit', 7:'a quiet obsession with truth and understanding that makes surface answers feel like an insult', 8:'an ambition for impact and mastery that rarely sleeps', 9:'a compassion so broad you sometimes feel it as a weight — a responsibility to the whole human story' };
+    c8 += `${firstName}, hidden within your name are what Chaldean numerology calls Hidden Passions — values that appear 3 or more times in your name letters, creating an almost compulsive energy.\n\nYour Hidden Passion${hiddenList.length>1?'s are':'  is'} the number${hiddenList.length>1?'s':''} ${hiddenList.join(' and ')}: ${hiddenList.map(n=>hpDesc[n]||`the energy of ${n}`).join('; and ')}.\n\n`;
+  }
+  if (lessonList.length > 0) {
+    c8 += `Your name is missing the energy of ${lessonList.join(' and ')} — Chaldean Karmic Lessons. Not weaknesses, but specific doors that life keeps knocking on in different forms until you open them.\n\n`;
+    if (lessonList.includes(5)) c8 += `Missing 5 means life keeps sending situations that ask you to embrace freedom, adaptability, and the unknown.\n`;
+    if (lessonList.includes(7)) c8 += `Missing 7 means life keeps sending situations that ask you to go deeper — to trust solitude and inner knowing even when the outer world demands action.\n`;
+    if (lessonList.includes(1)) c8 += `Missing 1 means life keeps inviting you to stand on your own authority — to lead and initiate without waiting for permission.\n`;
+    if (lessonList.includes(8)) c8 += `Missing 8 means life keeps presenting lessons around power, money, and material achievement.\n`;
+  }
+  if (hasKarmic) {
+    c8 += `\n${KARMIC_DEBT_TEXT[karmicDebtList[0]]||''}`;
+    if (karmic_debt_locations && karmic_debt_locations.length) {
+      c8 += ` This compound sits in your ${karmic_debt_locations.join(' and ')} — ${karmic_debt_locations.includes('soul_urge')?'the deepest possible location, inside your private desires.':karmic_debt_locations.includes('name')?'your public name expression.':'a significant position in your chart.'}`;
+    }
+  }
+  if (!c8.trim()) {
+    c8 = `${firstName}, your name has a remarkably balanced distribution of Chaldean values — all energy types are present. Balanced charts produce people who are genuinely difficult to read: versatile, adaptive, and capable of moving through very different worlds with equal ease. The challenge of balance is that it can become a lack of defining intensity.`;
+  }
 
-  const card8 = {
-    card_number:   8,
-    title:         `What Lies Beneath`,
-    subtitle:      `Your invitation to go deeper`,
-    body:          card8Body,
-    accent_number: maturity_number,
-    accent_label:  `Maturity Number`,
-  };
+  // ── CARD 9 — Timing Right Now ───────────────────────────
+  const pinnacleDesc = { 1:'a Sun chapter — independence, new beginnings, and the courage to lead.', 2:'a Moon chapter — partnerships, sensitivity, and cooperative endeavours.', 3:'a Jupiter chapter — expansion, creativity, and social growth.', 4:'a Rahu chapter — building, structure, and unconventional paths.', 5:'a Mercury chapter — change, freedom, and dynamic movement.', 6:'a Venus chapter — relationships, home, love, and responsibility.', 7:'a Ketu chapter — inner work, spiritual depth, and the quieting of external ambition.', 8:'a Saturn chapter — hard work, earned rewards, and material achievement. Saturn does not give easily, but what it gives, it keeps.', 9:'a completion chapter — service, release, and the generous giving of what you have accumulated.', 11:'a Master 11 chapter — your intuitive and creative gifts are amplified. You are being asked to inspire at a larger scale.' };
+  const challengeDesc = { 0:'Challenge 0 is rare — all challenges are in play simultaneously.', 1:'keeps asking: can you stand on your own authority without confusing independence with isolation?', 2:'keeps asking: can you hold your ground while remaining open and connected?', 3:'keeps asking: can you commit your creative gifts to something that lasts?', 4:'keeps asking: can you build with patience and not cut corners when the going is slow?', 5:'keeps asking: can you embrace change without running from the things that matter?', 6:'keeps asking: can you give love and care without losing yourself in the process?', 7:'keeps asking: can you trust your inner knowing without needing external verification for everything?', 8:'keeps asking: can you pursue power and achievement without compromising your integrity?' };
 
-  // ── TRAITS ────────────────────────────────────────────────
-  const rawTraits = [
-    ...(psychicEntry.traits   || []),
-    ...(destinyEntry.traits   || []),
-    ...(nameEntry.traits      || []),
-  ];
-  const traits = [...new Set(rawTraits)].slice(0, 6);
+  let c9 = `${firstName}, this card applies not to your life in general but to right now, in ${currentYear}.\n\n`;
+  c9 += `You are currently in Personal Year ${personal_year_number} — ${pyEntry.label}. ${pyEntry.tip}\n\n`;
+  c9 += `Your active Pinnacle is ${current_pinnacle} — ${pinnacleDesc[current_pinnacle]||`the energy of ${current_pinnacle}.`}${pinnacle_1_end_age?` This phase runs until age ${current_pinnacle===pinnacle_1?pinnacle_1_end_age:pinnacle_2_end_age||''}.`:''}\n\n`;
+  c9 += `Your current Challenge is ${current_challenge} — this is the recurring test of this life chapter. Challenge ${current_challenge} ${challengeDesc[current_challenge]||`keeps presenting the same lesson in different forms until it is mastered.`}`;
 
-  // ── DOMINANT THEME ────────────────────────────────────────
-  const dominant_theme = `Psychic ${psychic_number} (${psychicEntry.label || ruling_planet || "unknown"}) × Destiny ${destiny_number} (${destinyEntry.label || "purpose-driven"}) — ${hasMaster ? `charged with Master Number ${primaryMaster} energy` : hasKarmicDebt ? `carrying karmic compound ${karmicDebtList[0]}` : "grounded in steady purpose"} — expressed outwardly as Name Number ${name_number} (${nameEntry.label || "unique"}) meeting the world with ${(nameEntry.traits || ["depth"])[0]}.`;
+  // ── CARD 10 — Transits ──────────────────────────────────
+  const transitDesc = { 1:'Sun energy — independence and new beginnings govern this domain.', 2:'Moon energy — cooperation, intuition, and relational sensitivity shape this area.', 3:'Jupiter energy — expansion, optimism, and creative opportunity flow here.', 4:'Rahu energy — karmic acceleration and unconventional experiences in this domain.', 5:'Mercury energy — change, communication, and quick movement characterise this area.', 6:'Venus energy — love, beauty, and harmony govern this domain.', 7:'Ketu energy — this domain is being drawn inward, toward depth and spiritual understanding.', 8:'Saturn energy — discipline, karma, and earned rewards operate here.' };
 
-  // ── CTA ───────────────────────────────────────────────────
+  let c10 = `${firstName}, this is the most time-specific number in your entire chart — it changes every few years and applies only to you in this exact period.\n\n`;
+  c10 += `In Chaldean numerology, the letters of your name cycle through your life one at a time, each letter governing a span of years equal to its value. Right now, three different letters are simultaneously active:\n\n`;
+  if (physical_transit) c10 += `Physical Transit — letter ${physical_transit} (value ${physical_transit_value||'?'}) from your first name: ${transitDesc[physical_transit_value]||`Value ${physical_transit_value} governs your outer world.`}\n\n`;
+  if (mental_transit)   c10 += `Mental Transit — letter ${mental_transit} (value ${mental_transit_value||'?'}) governs your inner mental life right now: ${transitDesc[mental_transit_value]||`Value ${mental_transit_value} colours your thinking.`}\n\n`;
+  if (spiritual_transit)c10 += `Spiritual Transit — letter ${spiritual_transit} (value ${spiritual_transit_value||'?'}) governs your karmic and spiritual experiences: ${transitDesc[spiritual_transit_value]||`Value ${spiritual_transit_value} shapes your spiritual experiences.`}\n\n`;
+  if (essence_number)   c10 += `The sum of these three transit values gives your Essence Number: ${essence_number}. This is the overarching karmic theme of your current period. ${essence_number===9?'Essence 9 means you are in a period of completion and service — finishing what needs finishing, releasing what is ready to go.':essence_number===7?'Essence 7 means deep inner work and spiritual inquiry govern this entire period.':essence_number===8?'Essence 8 means material achievement and karmic reckoning are the dominant energies.':essence_number===1?'Essence 1 means new beginnings and independence define this karmic chapter.':essence_number===6?'Essence 6 means love, responsibility, and relational growth are the dominant karmic themes.':essence_number===3?'Essence 3 means creative expression and social expansion are the karmic themes.':essence_number===11?'Essence 11 — a master number essence — means this is a period of heightened intuition and potential inspiration.':essence_number===5?'Essence 5 means freedom, change, and dynamic movement are the karmic themes right now.':`Essence ${essence_number} marks the karmic theme of this exact period of your life.`}`;
+
+  // ── CARD 11 — FOMO / 90+ Numbers ───────────────────────
+  let c11 = `${firstName}, what you have seen across these 10 cards represents roughly 15–20 of your 90+ Chaldean numbers.\n\nThe numbers that remain in your complete reading include:\n\n`;
+  c11 += `Your Maturity Number ${maturity_number}${maturity_compound&&maturity_compound!==maturity_number?` (compound ${maturity_compound})`:''}  —  ${MATURITY_LABEL[maturity_number]||''}. The energy that becomes dominant after your mid-30s — describing who you are still growing into. This is one of the most personally relevant numbers for anyone in the second quarter of their life.\n\n`;
+  c11 += `Your Power Number ${power_number}${power_compound&&power_compound!==power_number?` (compound ${power_compound})`:''}  —  the combined potential available when your Name energy and Destiny work together. What you are actually capable of at your highest functioning.\n\n`;
+  c11 += `Your complete Pinnacle map  —  four life chapters${pinnacle_1&&pinnacle_2&&pinnacle_3&&pinnacle_4?` (${pinnacle_1}, ${pinnacle_2}, ${pinnacle_3}, ${pinnacle_4})`:', each with its specific energy'}, with exact start ages, end ages, and what each one asks of you. You are currently in Pinnacle ${current_pinnacle}.\n\n`;
+  c11 += `Your Bridge Numbers (${soul_expression_bridge!==undefined?soul_expression_bridge:'?'} and ${life_personality_bridge!==undefined?life_personality_bridge:'?'})  —  the exact gap between your Soul Urge and Name expression, and between your Destiny and Personality. Bridge numbers reveal precisely how to close the internal conflicts your chart contains.\n\n`;
+  c11 += `Your Rational Thought Number ${rational_thought_number!==undefined?rational_thought_number:'?'}  —  HOW you think and process information. Your Balance Number ${balance_number!==undefined?balance_number:'?'}  —  how you restore equilibrium when life destabilises you.\n\n`;
+  c11 += `And the full interpretation of all of these in combination — not as isolated numbers, but as a coherent portrait of a specific, irreplaceable person. That is what the Full Reading contains.`;
+
+  // ── TRAITS ──────────────────────────────────────────────
+  const traitMap = { 1:['Leader','Independent','Ambitious','Self-reliant'], 2:['Diplomatic','Sensitive','Cooperative','Intuitive'], 3:['Creative','Expressive','Optimistic','Joyful'], 4:['Grounded','Disciplined','Reliable','Methodical'], 5:['Adaptable','Curious','Magnetic','Quick-minded'], 6:['Devoted','Compassionate','Responsible','Harmonious'], 7:['Analytical','Introspective','Spiritual','Perceptive'], 8:['Ambitious','Strategic','Authoritative','Resilient'], 9:['Compassionate','Wise','Generous','Universal'], 11:['Visionary','Intuitive','Illuminating','Sensitive'], 22:['Disciplined','Powerful','Transformative','Grounded'] };
+  const traits = [...new Set([...(traitMap[psychic_number]||[]),...(traitMap[destiny_number]||[])])].slice(0,6);
+
+  // ── DOMINANT THEME ───────────────────────────────────────
+  const dominant_theme = `Psychic ${psychic_number} (${PSYCHIC[psychic_number]?.label||ruling_planet||''}) × Destiny ${destiny_number} (${DESTINY[destiny_number]?.label||''}) — ${hasMaster?`charged with Master Number ${masterList[0]}`:hasKarmic?`carrying karmic compound ${karmicDebtList[0]}`:'grounded in steady purpose'} — expressed as Name Number ${name_number} (${NAME_LABEL[name_number]||''}).`;
+
+  // ── CTA ──────────────────────────────────────────────────
   const cta = {
-    headline: `${firstName}'s full Chaldean blueprint goes far deeper than these 8 cards`,
+    headline: `${firstName}'s complete Chaldean blueprint — all 90+ numbers decoded`,
     teaser_lines: [
-      `What your Maturity Number ${maturity_number} reveals about who you are still becoming — and when that shift tends to arrive most powerfully`,
-      `Your complete Pinnacle and Challenge map: the specific opportunities and lessons for every phase of your life from now onward`,
-      hasKarmicDebt
-        ? `The full meaning of your karmic compound ${karmicDebtList[0]} — what it has already shaped in your life, and how to work with it rather than against it`
-        : `The deeper analysis of your ${pd_combination || `${psychic_number}-${destiny_number}`} Psychic-Destiny combination and what it reveals about the central tension and gift of your life`,
+      `Your Maturity Number ${maturity_number} (${MATURITY_LABEL[maturity_number]||''}) — who you are still becoming, and when this shift arrives most powerfully`,
+      `Your complete Pinnacle and Challenge map across all four life phases with specific ages and what each phase asks of you`,
+      hasKarmic
+        ? `The full interpretation of your karmic compound ${karmicDebtList[0]} — what it has already shaped and exactly how to work with it`
+        : `Your Bridge Numbers (${soul_expression_bridge} and ${life_personality_bridge}) — exactly how to close the internal tensions your chart contains`,
     ],
-    button_text: 'Unlock My Full Blueprint',
+    button_text: 'Unlock My Full Reading — ₹999',
   };
 
   return {
-    first_name:     firstName,
-    cards:          [card1, card2, card3, card4, card5, card6, card7, card8],
+    first_name: firstName,
+    cards: [
+      { card_number:1,  title:`${firstName}, your chart is not what most people expect`,   subtitle: hasMaster?`Master Number ${masterList[0]} detected`:pdSame?`Rare ${pd_combination} double alignment`:`The ${pd_combination} combination`, body:c1,  accent_number:null, accent_label:null },
+      { card_number:2,  title:`Psychic Number ${psychic_number} — ${PSYCHIC[psychic_number]?.label||''}`,  subtitle:`Ruled by ${ruling_planet||'your planet'} · The instinctive self`,           body:c2,  accent_number:null, accent_label:null },
+      { card_number:3,  title:`Destiny Number ${destiny_number} — ${DESTINY[destiny_number]?.label||''}`,  subtitle:`Compound ${destiny_compound} · The life direction`,                         body:c3,  accent_number:null, accent_label:null },
+      { card_number:4,  title:`Name ${name_number} meets Soul Urge ${soul_urge_number}`,                   subtitle:`${NAME_LABEL[name_number]||''} · ${hasTension?'An inner tension worth knowing':'Aligned energies'}`, body:c4, accent_number:null, accent_label:null },
+      { card_number:5,  title:`Personality Number ${personality_number} — How the World Sees You`,         subtitle:`The outer mask · Your first impression`,                                    body:c5,  accent_number:null, accent_label:null },
+      { card_number:6,  title:`The Letters in Your Name`,                                                   subtitle:`Cornerstone ${cornerstone||'?'} · Capstone ${capstone||'?'} · First Vowel ${first_vowel||'?'}`, body:c6, accent_number:null, accent_label:null },
+      { card_number:7,  title:`Your Planes of Expression`,                                                  subtitle:`${pct(plane_mental_count)}% Mental · ${pct(plane_physical_count)}% Physical · ${pct(plane_intuitive_count)}% Intuitive`, body:c7, accent_number:null, accent_label:null },
+      { card_number:8,  title:`Hidden Passions & Karmic Lessons`,                                           subtitle:`What your name letters reveal beneath the numbers`,                         body:c8,  accent_number:null, accent_label:null },
+      { card_number:9,  title:`Your Timing in ${currentYear}`,                                             subtitle:`Personal Year ${personal_year_number} · Pinnacle ${current_pinnacle} · Challenge ${current_challenge}`, body:c9, accent_number:null, accent_label:null },
+      { card_number:10, title:`Your Three Active Transits`,                                                 subtitle:`${physical_transit||'?'} · ${mental_transit||'?'} · ${spiritual_transit||'?'} · Essence ${essence_number||'?'}`, body:c10, accent_number:null, accent_label:null },
+      { card_number:11, title:`The Numbers Still Unrevealed`,                                               subtitle:`What your complete blueprint contains`, body:c11, accent_number:null, accent_label:null },
+    ],
     cta,
     traits,
     dominant_theme,
   };
 }
 
-// ══════════════════════════════════════════════════════════════
-//  run() — called by dispatcher
-// ══════════════════════════════════════════════════════════════
 function run(service, profile) {
   return buildCards(profile);
 }

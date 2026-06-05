@@ -1,7 +1,7 @@
 // ============================================================
 //  src/prompts/free_reading_v1.0.js
 //  8-card Chaldean narrative prompt for the free personality reading.
-//  Used by claude.js and openai.js engines.
+//  Used by claude.js openai.js or hardcoded engines.
 //
 //  SETUP CHECKLIST BEFORE DEPLOYING:
 //    1. In claude.js        → max_tokens must be 3500 (not 2000)

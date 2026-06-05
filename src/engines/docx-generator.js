@@ -1,15 +1,14 @@
 // ============================================================
 //  src/engines/docx-generator.js
-//  v1 — Convert HTML (with colors/styles) → DOCX file
+//  v2 — FIXED: Convert HTML → DOCX file properly
 //
 //  Input:  HTML string with embedded CSS and inline styles
-//  Output: DOCX file as Buffer
+//  Output: DOCX file as Buffer (base64 ready for DB storage)
 //
 //  Uses: html-docx-js library to preserve formatting
 // ============================================================
 
 const htmlDocx = require("html-docx-js");
-const fs = require("fs");
 
 const FILE = "src/engines/docx-generator.js";
 
@@ -44,25 +43,24 @@ async function htmlToDocx(htmlString, fileName = "report.docx") {
 
     log(2, "HTML received", {
       length: htmlString.length,
-      preview: htmlString.slice(0, 200),
+      preview: htmlString.slice(0, 150),
     });
 
     // Convert HTML → DOCX using html-docx-js
-    // Returns a document object compatible with DOCX format
+    // ⚠️  IMPORTANT: asBlob() is async, must await
     log(3, "Converting HTML → DOCX using html-docx-js");
-    const docx = htmlDocx.asBlob(htmlString);
+    const docx = await htmlDocx.asBlob(htmlString);
 
     log(4, "Conversion successful", {
       type: typeof docx,
       size: docx ? docx.size : 0,
     });
 
-    // Convert Blob → Buffer (for storing in DB or file system)
+    // Convert Blob → Buffer
     const buffer = await blobToBuffer(docx);
 
     log(5, "Blob → Buffer conversion done", {
       bufferLength: buffer.length,
-      bufferPreview: buffer.toString("base64").slice(0, 100),
     });
 
     // Return both Buffer and base64 (for flexibility)
@@ -90,7 +88,7 @@ async function htmlToDocx(htmlString, fileName = "report.docx") {
 }
 
 // ────────────────────────────────────────────────────────────
-// Helper: Convert Blob → Buffer
+// Helper: Convert Blob → Buffer (FIXED VERSION)
 // ────────────────────────────────────────────────────────────
 async function blobToBuffer(blob) {
   log("blob-to-buffer", "Converting Blob → Buffer");
@@ -99,27 +97,29 @@ async function blobToBuffer(blob) {
     throw new Error("Blob is null or undefined");
   }
 
-  // html-docx-js returns a Blob-like object
-  // We need to convert it to a Buffer
-  if (typeof blob.stream === "function") {
-    // Node 15+ Blob API
-    const stream = blob.stream();
-    const chunks = [];
-    return new Promise((resolve, reject) => {
-      stream.on("data", (chunk) => chunks.push(chunk));
-      stream.on("end", () => resolve(Buffer.concat(chunks)));
-      stream.on("error", reject);
-    });
-  } else if (typeof blob.arrayBuffer === "function") {
-    // Fallback: use arrayBuffer method
-    const arrayBuffer = await blob.arrayBuffer();
-    return Buffer.from(arrayBuffer);
-  } else if (Buffer.isBuffer(blob)) {
-    // Already a Buffer
-    return blob;
-  } else {
-    // Last resort: try to convert to Buffer directly
+  try {
+    // FIXED: Use arrayBuffer() method (most reliable)
+    // This works in Node.js 15+ and browser environments
+    if (typeof blob.arrayBuffer === "function") {
+      log("blob-to-buffer", "Using blob.arrayBuffer() method");
+      const arrayBuffer = await blob.arrayBuffer();
+      return Buffer.from(arrayBuffer);
+    }
+
+    // Fallback: If somehow it's already a Buffer
+    if (Buffer.isBuffer(blob)) {
+      log("blob-to-buffer", "Blob is already a Buffer");
+      return blob;
+    }
+
+    // Last resort: Try direct conversion
+    log("blob-to-buffer", "Attempting direct Buffer.from() conversion");
     return Buffer.from(blob);
+  } catch (err) {
+    error("blob-to-buffer", "Failed to convert Blob to Buffer", {
+      message: err.message,
+    });
+    throw err;
   }
 }
 
@@ -129,7 +129,12 @@ async function blobToBuffer(blob) {
 function generateFileName(subjectName) {
   const now = new Date();
   const date = now.toISOString().split("T")[0]; // YYYY-MM-DD
-  const time = now.toISOString().split("T")[1].split(".")[0].replace(/:/g, ""); // HHMMSS
+  const time = now
+    .toISOString()
+    .split("T")[1]
+    .split(".")[0]
+    .replace(/:/g, ""); // HHMMSS
+
   const cleanName = (subjectName || "Report")
     .replace(/[^a-zA-Z0-9\s]/g, "") // Remove special chars
     .replace(/\s+/g, "_") // Replace spaces with underscores

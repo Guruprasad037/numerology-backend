@@ -1,3 +1,10 @@
+//in this code, here is a line called   defaultEngine: "hardcoded",
+//you can change it as per you need
+//currently i support two options
+//1.  defaultEngine: "hardcoded",
+//2.  defaultEngine: "claude", (For free reading, it costs around Rs 8.56/-)
+
+
 // src/reading.settings.js
 const FILE = "src/reading.settings.js";
 

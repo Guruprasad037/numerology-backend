@@ -321,23 +321,87 @@ router.get('/pending', async (req, res) => {
 // ─────────────────────────────────────────────
 // MARK READING AS DELIVERED
 // ─────────────────────────────────────────────
-router.post('/readings/:id/deliver', async (req, res) => {
+// ─────────────────────────────────────────────
+// PENDING PAID READINGS  (fulfilment queue)
+// Returns only paid orders where report has not yet been sent
+// ─────────────────────────────────────────────
+router.get('/pending-paid', async (req, res) => {
   try {
-    const { delivered_to, report_text = '' } = req.body;
-    if (!delivered_to)
-      return res.status(400).json({ error: 'delivered_to (email) is required.' });
+    const rows = await dbAll(
+      `SELECT
+        r.id              AS reading_id,
+        r.status,
+        r.product_slug,
+        r.created_at      AS reading_created_at,
+        r.admin_notes,
+        c.full_name       AS customer_full_name,
+        c.email,
+        c.phone,
+        o.id              AS order_id,
+        o.customer_name,
+        o.subject_name,
+        o.subject_dob,
+        o.subject_gender,
+        o.is_self,
+        o.final_amount,
+        o.paid_at,
+        np.name_used,
+        np.dob_used,
+        np.psychic_number,      np.psychic_compound,
+        np.destiny_number,      np.destiny_compound,
+        np.name_number,         np.name_compound,
+        np.soul_urge_number,    np.soul_urge_compound,
+        np.personality_number,  np.personality_compound,
+        np.maturity_number,     np.maturity_compound,
+        np.power_number,
+        np.personal_year_number,
+        np.ruling_planet,       np.pd_combination,
+        np.has_karmic_debt,     np.karmic_debt_numbers,
+        np.has_master_11,       np.has_master_22,     np.has_master_33,
+        np.current_pinnacle,    np.current_challenge,
+        np.essence_number,      np.dominant_plane,
+        np.missing_numbers,     np.hidden_passions
+       FROM readings r
+       JOIN customers c  ON c.id  = r.user_id
+       LEFT JOIN orders o         ON o.id  = r.order_id
+       LEFT JOIN numerology_profiles np ON np.id = r.profile_id
+       WHERE r.order_id IS NOT NULL
+         AND r.status IN ('pending', 'generated')
+         AND r.report_sent_at IS NULL
+       ORDER BY o.paid_at ASC NULLS LAST, r.created_at ASC`
+    );
+    res.json({ count: rows.length, pending: rows });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to fetch pending paid readings.' });
+  }
+});
+
+// ─────────────────────────────────────────────
+// MARK READING AS SENT
+// Called when you have manually sent the PDF to the customer
+// Body: { sent_to (email), sent_by, admin_notes }
+// ─────────────────────────────────────────────
+router.post('/readings/:id/mark-sent', async (req, res) => {
+  try {
+    const { sent_to, sent_by = 'admin', admin_notes = '' } = req.body;
+    if (!sent_to)
+      return res.status(400).json({ error: 'sent_to (email) is required.' });
 
     await dbRun(
       `UPDATE readings
-       SET status       = 'delivered',
-           delivered_to = $1,
-           report_text  = NULLIF($2, ''),
-           delivered_at = NOW(),
-           generated_at = COALESCE(generated_at, NOW())
-       WHERE id = $3`,
-      [delivered_to, report_text, req.params.id]
+       SET status          = 'delivered',
+           delivered_to    = $1,
+           report_sent_at  = NOW(),
+           delivered_at    = NOW(),
+           generated_at    = COALESCE(generated_at, NOW()),
+           sent_by         = $2,
+           admin_notes     = NULLIF($3, '')
+       WHERE id = $4`,
+      [sent_to, sent_by, admin_notes, req.params.id]
     );
 
+    // Upgrade customer tier to paid_reading
     await dbRun(
       `UPDATE customers
        SET tier       = 'paid_reading',
@@ -350,7 +414,25 @@ router.post('/readings/:id/deliver', async (req, res) => {
     res.json({ success: true });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: 'Failed to mark as delivered.' });
+    res.status(500).json({ error: 'Failed to mark reading as sent.' });
+  }
+});
+
+// ─────────────────────────────────────────────
+// SAVE ADMIN NOTES (without marking sent)
+// Useful for adding notes while working on the report
+// ─────────────────────────────────────────────
+router.post('/readings/:id/notes', async (req, res) => {
+  try {
+    const { admin_notes = '' } = req.body;
+    await dbRun(
+      `UPDATE readings SET admin_notes = $1 WHERE id = $2`,
+      [admin_notes, req.params.id]
+    );
+    res.json({ success: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to save notes.' });
   }
 });
 

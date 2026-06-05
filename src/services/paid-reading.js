@@ -1,19 +1,16 @@
 // ============================================================
-//  src/services/paid-reading.js  v2
+//  src/services/paid-reading.js  v3
 //
-//  CHANGES from v1:
-//    - PAID_REPORT_DELIVERY_MODE removed entirely
-//    - Always generates a report (engine controls cost, not mode)
-//    - Handles both result shapes from dispatcher:
-//        { _html, _engine_config, _engine_used }  ← hardcoded paid
-//        { cards, cta, ... }                       ← claude (JSON)
-//    - If dispatcher fails entirely, falls back to buildFallbackHTML()
+//  CHANGES from v2:
+//    - Removed DOCX conversion entirely (html-docx-js unreliable)
+//    - Saves full HTML directly in report_content
+//    - Admin downloads .html file via /readings/:id/report-html
+//    - No external dependencies beyond dispatcher + db
 // ============================================================
 
-const settings                  = require('../reading.settings');
-const dispatcher                = require('../engines/dispatcher');
-const { htmlToDocx, generateFileName } = require('../engines/docx-generator');
-const { dbRun }                 = require('../config/db');
+const settings   = require('../reading.settings');
+const dispatcher = require('../engines/dispatcher');
+const { dbRun }  = require('../config/db');
 
 const FILE = 'src/services/paid-reading.js';
 
@@ -36,9 +33,9 @@ async function handlePaidReading(order, profile, profileId) {
     engine:      settings.PAID_READING_ENGINE,
   });
 
-  let htmlReport    = null;
-  let engineConfig  = settings.PAID_READING_ENGINE;
-  let engineUsed    = 'unknown';
+  let htmlReport   = null;
+  let engineConfig = settings.PAID_READING_ENGINE;
+  let engineUsed   = 'unknown';
 
   // ── Step 1: Generate HTML via dispatcher ─────────────────
   try {
@@ -51,17 +48,18 @@ async function handlePaidReading(order, profile, profileId) {
     engineUsed   = dispatchResult._engine_used   || 'unknown';
 
     // ── Extract HTML from result ──────────────────────────
-    // Shape A: hardcoded paid reading wraps HTML in _html field
-    // Shape B: claude returns JSON with cards array
+    // Shape A: hardcoded paid reading → _html field contains ready HTML
+    // Shape B: claude → cards array → build HTML from cards
     if (dispatchResult._html) {
-      // Hardcoded engine — HTML is ready
       htmlReport = dispatchResult._html;
       log(3, 'HTML from hardcoded engine', { length: htmlReport.length });
 
     } else if (dispatchResult.cards && dispatchResult.cards.length > 0) {
-      // Claude returned structured JSON — build HTML from cards
       htmlReport = buildHTMLFromCards(dispatchResult, profile);
-      log(3, 'HTML built from Claude cards', { cardCount: dispatchResult.cards.length, length: htmlReport.length });
+      log(3, 'HTML built from Claude cards', {
+        cardCount: dispatchResult.cards.length,
+        length:    htmlReport.length,
+      });
 
     } else {
       log(3, 'Dispatcher returned unexpected shape — will use fallback', {
@@ -77,26 +75,24 @@ async function handlePaidReading(order, profile, profileId) {
   // ── Step 2: Fallback if still no HTML ────────────────────
   if (!htmlReport) {
     log(4, 'Using emergency fallback HTML');
-    htmlReport   = buildFallbackHTML(profile);
-    engineUsed   = 'hardcoded';
+    htmlReport = buildFallbackHTML(profile);
+    engineUsed = 'hardcoded';
   }
 
-  // ── Step 3: Convert HTML → DOCX ──────────────────────────
-  log(5, 'Converting HTML → DOCX');
-  const fileName  = generateFileName(order.subject_name || order.customer_name);
-  const docxResult = await htmlToDocx(htmlReport, fileName);
+  log(5, 'HTML ready', { length: htmlReport.length, engineConfig, engineUsed });
 
-  log(6, 'DOCX generated', { fileName: docxResult.fileName, size: docxResult.size });
+  // ── Step 3: Save to database ─────────────────────────────
+  log(6, 'Saving reading to database');
 
-  // ── Step 4: Save to database ─────────────────────────────
-  log(7, 'Saving reading to database');
+  const subjectName  = order.subject_name || order.customer_name || 'Report';
+  const cleanName    = subjectName.replace(/[^a-zA-Z0-9\s]/g, '').replace(/\s+/g, '_').slice(0, 30);
+  const dateStr      = new Date().toISOString().split('T')[0];
+  const htmlFileName = `Reading_${cleanName}_${dateStr}.html`;
 
   const reportContent = {
-    type:          'docx',
-    html_source:   htmlReport.slice(0, 5000),  // first 5000 chars for reference
-    docx_base64:   docxResult.base64,
-    docx_filename: docxResult.fileName,
-    docx_size:     docxResult.size,
+    type:          'html',
+    html:          htmlReport,
+    html_filename: htmlFileName,
     generated_at:  new Date().toISOString(),
     engine_config: engineConfig,
     engine_used:   engineUsed,
@@ -124,16 +120,16 @@ async function handlePaidReading(order, profile, profileId) {
 
   const readingId = readingResult.rows[0].id;
 
-  log(8, 'Reading saved', {
+  log(7, 'Reading saved successfully', {
     readingId,
-    status:      'generated',
+    status:       'generated',
     engineConfig,
     engineUsed,
-    docxFilename: docxResult.fileName,
-    docxSize:     docxResult.size,
+    htmlFileName,
+    htmlLength:   htmlReport.length,
   });
 
-  console.log(`[${FILE}] >>> SUCCESS | readingId=${readingId} | engine_config=${engineConfig} | engine_used=${engineUsed} | docx_ready_for_download`);
+  console.log(`[${FILE}] >>> SUCCESS | readingId=${readingId} | engine_config=${engineConfig} | engine_used=${engineUsed} | html_ready_for_download`);
 
   return {
     success:      true,
@@ -141,8 +137,7 @@ async function handlePaidReading(order, profile, profileId) {
     status:       'generated',
     engineConfig,
     engineUsed,
-    docxFileName: docxResult.fileName,
-    docxSize:     docxResult.size,
+    htmlFileName,
     message:      'Report generated and ready for review',
   };
 }
@@ -165,7 +160,7 @@ function buildHTMLFromCards(dispatchResult, profile) {
         ${card.subtitle ? `<span style="font-weight:normal;font-size:12px;opacity:0.85;margin-left:10px;">${card.subtitle}</span>` : ''}
       </div>
       <div style="padding:14px 16px;line-height:1.7;font-size:13px;background:#fff;border:1px solid #ddd;border-top:none;">
-        ${(card.body || '').replace(/\n\n/g,'</p><p style="margin:0 0 10px 0;">').replace(/\n/g,' ')}
+        ${(card.body || '').replace(/\n\n/g, '</p><p style="margin:0 0 10px 0;">').replace(/\n/g, ' ')}
       </div>
     </div>
   `).join('');
@@ -188,7 +183,7 @@ function buildHTMLFromCards(dispatchResult, profile) {
 ${cardRows}
 <div class="footer">
   Generated by NumeroSoul &nbsp;·&nbsp;
-  ${new Date().toLocaleDateString('en-IN',{day:'numeric',month:'long',year:'numeric'})}
+  ${new Date().toLocaleDateString('en-IN', { day:'numeric', month:'long', year:'numeric' })}
 </div>
 </body>
 </html>`;
@@ -217,18 +212,18 @@ function buildFallbackHTML(profile) {
 <p><strong>Date of Birth:</strong> ${profile.dob_fmt || profile.dob_used || ''}</p>
 <table>
   <tr><th>Number Type</th><th>Value</th></tr>
-  <tr><td>Psychic</td>     <td><span class="num">${profile.psychic_number || '—'}</span></td></tr>
-  <tr><td>Destiny</td>     <td><span class="num">${profile.destiny_number || '—'}</span></td></tr>
-  <tr><td>Name</td>        <td><span class="num">${profile.name_number || '—'}</span></td></tr>
-  <tr><td>Soul Urge</td>   <td><span class="num">${profile.soul_urge_number || '—'}</span></td></tr>
-  <tr><td>Personality</td> <td><span class="num">${profile.personality_number || '—'}</span></td></tr>
-  <tr><td>Life Path</td>   <td><span class="num">${profile.life_path_number || profile.destiny_number || '—'}</span></td></tr>
-  <tr><td>Maturity</td>    <td><span class="num">${profile.maturity_number || '—'}</span></td></tr>
-  <tr><td>Power</td>       <td><span class="num">${profile.power_number || '—'}</span></td></tr>
+  <tr><td>Psychic</td>      <td><span class="num">${profile.psychic_number || '—'}</span></td></tr>
+  <tr><td>Destiny</td>      <td><span class="num">${profile.destiny_number || '—'}</span></td></tr>
+  <tr><td>Name</td>         <td><span class="num">${profile.name_number || '—'}</span></td></tr>
+  <tr><td>Soul Urge</td>    <td><span class="num">${profile.soul_urge_number || '—'}</span></td></tr>
+  <tr><td>Personality</td>  <td><span class="num">${profile.personality_number || '—'}</span></td></tr>
+  <tr><td>Life Path</td>    <td><span class="num">${profile.life_path_number || profile.destiny_number || '—'}</span></td></tr>
+  <tr><td>Maturity</td>     <td><span class="num">${profile.maturity_number || '—'}</span></td></tr>
+  <tr><td>Power</td>        <td><span class="num">${profile.power_number || '—'}</span></td></tr>
   <tr><td>Personal Year</td><td><span class="num">${profile.personal_year_number || '—'}</span></td></tr>
 </table>
 <p style="color:#999;font-size:12px;text-align:center;">
-  Generated by NumeroSoul · ${new Date().toLocaleDateString('en-IN',{day:'numeric',month:'long',year:'numeric'})}
+  Generated by NumeroSoul · ${new Date().toLocaleDateString('en-IN', { day:'numeric', month:'long', year:'numeric' })}
 </p>
 </body>
 </html>`;

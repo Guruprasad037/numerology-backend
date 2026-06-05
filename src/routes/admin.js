@@ -1,10 +1,10 @@
 // ============================================================
-//  src/routes/admin.js
-//  v3 — Added DOCX download endpoint for MODE 2 reports
+//  src/routes/admin.js  v4
 //
-//  NEW ENDPOINTS:
-//    GET  /admin/readings/:id/report-docx    — download DOCX file
-//    POST /admin/readings/:id/mark-sent      — mark as delivered + save comments
+//  CHANGES from v3:
+//    - /readings/:id/report-docx  replaced with
+//      /readings/:id/report-html  — downloads .html file
+//    - mark-sent, notes, all other endpoints unchanged
 // ============================================================
 
 const express = require("express");
@@ -304,10 +304,10 @@ router.get("/pending-paid", async (req, res) => {
 });
 
 // ────────────────────────────────────────────────────────────
-// DOWNLOAD DOCX REPORT
-// New endpoint — returns the generated DOCX file
+// DOWNLOAD HTML REPORT
+// Returns the generated HTML file as a download
 // ────────────────────────────────────────────────────────────
-router.get("/readings/:id/report-docx", async (req, res) => {
+router.get("/readings/:id/report-html", async (req, res) => {
   try {
     const reading = await dbGet(
       `SELECT id, report_content, status FROM readings WHERE id = $1`,
@@ -318,7 +318,6 @@ router.get("/readings/:id/report-docx", async (req, res) => {
       return res.status(404).json({ error: "Reading not found." });
     }
 
-    // Parse report_content to get DOCX base64
     let reportContent;
     try {
       reportContent = JSON.parse(reading.report_content || "{}");
@@ -326,33 +325,20 @@ router.get("/readings/:id/report-docx", async (req, res) => {
       return res.status(400).json({ error: "Invalid report format." });
     }
 
-    // Check if DOCX exists
-    if (!reportContent.docx_base64) {
-      return res.status(400).json({
-        error:
-          "No DOCX report available. (MODE 1: Manual generation, or report generation failed)",
-      });
+    if (!reportContent.html) {
+      return res.status(400).json({ error: "No HTML report available for this reading." });
     }
 
-    // Convert base64 → Buffer
-    const docxBuffer = Buffer.from(reportContent.docx_base64, "base64");
-
-    // Generate filename with timestamp
-    const fileName = reportContent.docx_filename || "report.docx";
-
-    // Send file
-    res.setHeader(
-      "Content-Type",
-      "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    );
-    res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
-    res.setHeader("Content-Length", docxBuffer.length);
+    const fileName = reportContent.html_filename || "report.html";
 
     console.log(
-      `[admin.js] >>> Sending DOCX download | readingId=${req.params.id} | fileName="${fileName}" | size=${docxBuffer.length}`
+      `[admin.js] >>> Sending HTML download | readingId=${req.params.id} | fileName="${fileName}" | size=${reportContent.html.length}`
     );
 
-    res.send(docxBuffer);
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
+    res.send(reportContent.html);
+
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to download report." });
@@ -456,37 +442,14 @@ router.get("/leads/export", async (req, res) => {
     );
 
     const header = [
-      "ID",
-      "Created At",
-      "Name",
-      "Email",
-      "Phone",
-      "DOB",
-      "Gender",
-      "Tier",
-      "Psychic",
-      "Psychic Compound",
-      "Destiny",
-      "Destiny Compound",
-      "Name Number",
-      "Name Compound",
-      "Soul Urge",
-      "Personality",
-      "Maturity",
-      "Power",
-      "Personal Year",
-      "Ruling Planet",
-      "PD Combo",
-      "Karmic Debt?",
-      "Karmic Debt Numbers",
-      "Master 11?",
-      "Master 22?",
-      "Master 33?",
-      "Current Pinnacle",
-      "Current Challenge",
-      "Dominant Plane",
-      "Missing Numbers",
-      "Essence Number",
+      "ID","Created At","Name","Email","Phone","DOB","Gender","Tier",
+      "Psychic","Psychic Compound","Destiny","Destiny Compound",
+      "Name Number","Name Compound","Soul Urge","Personality",
+      "Maturity","Power","Personal Year","Ruling Planet","PD Combo",
+      "Karmic Debt?","Karmic Debt Numbers",
+      "Master 11?","Master 22?","Master 33?",
+      "Current Pinnacle","Current Challenge","Dominant Plane",
+      "Missing Numbers","Essence Number",
     ].join(",");
 
     const csv = [
@@ -514,27 +477,20 @@ router.get("/leads/export", async (req, res) => {
         r.ruling_planet || "",
         r.pd_combination || "",
         r.has_karmic_debt ?? "",
-        Array.isArray(r.karmic_debt_numbers)
-          ? `"${r.karmic_debt_numbers.join(",")}"`
-          : "",
+        Array.isArray(r.karmic_debt_numbers) ? `"${r.karmic_debt_numbers.join(",")}"` : "",
         r.has_master_11 ?? "",
         r.has_master_22 ?? "",
         r.has_master_33 ?? "",
         r.current_pinnacle ?? "",
         r.current_challenge ?? "",
         r.dominant_plane || "",
-        Array.isArray(r.missing_numbers)
-          ? `"${r.missing_numbers.join(",")}"`
-          : "",
+        Array.isArray(r.missing_numbers) ? `"${r.missing_numbers.join(",")}"` : "",
         r.essence_number ?? "",
       ].join(",")),
     ].join("\n");
 
     res.setHeader("Content-Type", "text/csv");
-    res.setHeader(
-      "Content-Disposition",
-      'attachment; filename="knowselfnow-leads.csv"'
-    );
+    res.setHeader("Content-Disposition", 'attachment; filename="knowselfnow-leads.csv"');
     res.send(csv);
   } catch (err) {
     console.error(err);

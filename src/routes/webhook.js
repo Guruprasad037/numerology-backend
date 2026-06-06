@@ -1,32 +1,32 @@
 // ============================================================
 //  src/routes/webhook.js
-//  v4 — Fixed subject-aware numerology profile lookup
+//  v5 — Paid reading profiles are now permanent (never demoted)
 //
-//  BUG FIXED (v3 → v4):
-//    In v3, Step 9 checked for an existing numerology_profile
-//    using only `user_id` (the CUSTOMER's ID — e.g. Gajendra).
+//  CHANGES (v4 → v5):
+//    The demotion step (UPDATE numerology_profiles SET
+//    is_primary=FALSE) has been REMOVED for paid readings.
 //
-//    This meant: if Gajendra ordered for Abhi first, a profile
-//    was created with user_id=Gajendra, is_primary=TRUE.
-//    When Gajendra later ordered for Bharat, Step 9 found
-//    Abhi's profile (same user_id, is_primary=TRUE) and reused
-//    it — so Bharat's reading row ended up linked to Abhi's
-//    numerology profile. Wrong profile, wrong numbers.
+//    Why it was wrong:
+//      Demotion was copied from the free-reading pattern where
+//      one visitor has one "active" profile at a time. For paid
+//      readings, each subject (Abhi, Bharat, Chirag, Deeksha)
+//      is a different person — all profiles must be kept
+//      permanently so admin can see every subject's numbers.
 //
-//  THE FIX:
-//    Step 9 now matches on (user_id + name_used + dob_used).
-//    - Same customer, same subject → reuse existing profile
-//      (handles duplicate webhook delivery / repurchase safely)
-//    - Same customer, different subject → demote the current
-//      primary profile (satisfies the UNIQUE index on user_id
-//      WHERE is_primary=TRUE), then insert a fresh profile for
-//      the new subject.
+//    What we do instead:
+//      All paid reading profiles are inserted with
+//      is_primary = FALSE. The UNIQUE index on
+//      (user_id WHERE is_primary=TRUE) is therefore never
+//      triggered and multiple subjects under one customer
+//      coexist safely without any demotion needed.
 //
-//  This is the same pattern already used correctly in
-//  src/services/reading-db.js for free readings.
+//    Free reading path (reading-db.js) is completely unchanged
+//    — demotion still happens there and is correct for that
+//    anonymous single-profile-per-visitor pattern.
 //
-//  NOTHING ELSE CHANGED — all other routes, services, and the
-//  free reading path are completely unaffected.
+//  ALSO FIXED IN v4 (still present):
+//    Profile lookup matches (user_id + name_used + dob_used)
+//    so the same subject repurchasing is handled correctly.
 // ============================================================
 
 const express = require("express");
@@ -152,27 +152,18 @@ router.post("/", async (req, res) => {
 
     // ── 5. Create or get numerology profile record ──────────────
     //
-    // FIX (v4): Match on (user_id + name_used + dob_used) — NOT
-    // just user_id.
+    // Lookup matches (user_id + name_used + dob_used) so:
+    //   - Same customer, same subject  → reuse existing profile
+    //     (covers duplicate webhook delivery and repurchases)
+    //   - Same customer, new subject   → insert a fresh profile
     //
-    // Why this matters:
-    //   The `numerology_profiles` table has a UNIQUE index on
-    //   user_id WHERE is_primary = TRUE. user_id here is the
-    //   CUSTOMER (e.g. Gajendra), not the subject. So if
-    //   Gajendra orders for two different subjects (Abhi, Bharat),
-    //   both orders share the same user_id. Checking only user_id
-    //   caused the second subject (Bharat) to reuse the first
-    //   subject's (Abhi's) profile — wrong numbers in the report.
+    // All paid reading profiles use is_primary = FALSE.
+    // This means the UNIQUE index on (user_id WHERE is_primary=TRUE)
+    // is never triggered, and no demotion step is needed.
+    // Every subject's profile under a customer is kept permanently.
     //
-    //   By matching name_used + dob_used as well, we correctly
-    //   distinguish "same customer, same subject" (reuse) from
-    //   "same customer, different subject" (new profile needed).
-    //
-    // Duplicate webhook safety:
-    //   If Razorpay fires payment.captured twice for the same
-    //   order, the `order.status === 'paid'` check above already
-    //   short-circuits before we ever reach this step. The
-    //   name+dob match here is a second safety net.
+    // Contrast with free readings (reading-db.js) where demotion
+    // is still correct — one anonymous visitor, one active profile.
     // ────────────────────────────────────────────────────────────
     log(9, "Checking for existing numerology profile for this subject", {
       user_id: order.user_id,
@@ -182,7 +173,7 @@ router.post("/", async (req, res) => {
 
     const existingForSubject = await dbGet(
       `SELECT id FROM numerology_profiles
-       WHERE user_id  = $1
+       WHERE user_id   = $1
          AND name_used = $2
          AND dob_used  = $3
        LIMIT 1`,
@@ -193,8 +184,6 @@ router.post("/", async (req, res) => {
 
     if (existingForSubject) {
       // Same customer + same subject → reuse the existing profile.
-      // This covers: duplicate webhook delivery, or the same
-      // customer repurchasing a reading for the same person.
       profileId = existingForSubject.id;
       log(9.1, "Reusing existing profile — same customer + same subject", {
         profileId,
@@ -203,21 +192,14 @@ router.post("/", async (req, res) => {
       });
 
     } else {
-      // Different subject under the same customer (or first ever
-      // order for this customer). Demote any existing primary
-      // profile first so the UNIQUE index doesn't block the insert.
-      log(9.2, "New subject detected — demoting current primary profile (if any)", {
+      // New subject for this customer — insert a fresh profile.
+      // NO demotion needed because is_primary = FALSE (see above).
+      log(9.2, "New subject — inserting fresh profile", {
+        subjectName,
+        subjectDob,
         user_id: order.user_id,
       });
-      await dbRun(
-        `UPDATE numerology_profiles
-         SET is_primary = FALSE
-         WHERE user_id = $1 AND is_primary = TRUE`,
-        [order.user_id]
-      );
 
-      // Insert fresh numerology profile for this subject.
-      log(9.3, "Inserting new numerology profile", { subjectName, subjectDob });
       const p = profile;
       const profileResult = await dbRun(
         `INSERT INTO numerology_profiles (
@@ -260,7 +242,7 @@ router.post("/", async (req, res) => {
           essence_number,
           schema_version, calculated_at
         ) VALUES (
-          $1,$2,$3,TRUE,
+          $1,$2,$3,FALSE,
           $4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,
           $20,$21,$22,$23,$24,$25,$26,$27,$28,$29,
           $30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,
@@ -368,22 +350,21 @@ router.post("/", async (req, res) => {
         ]
       );
       profileId = profileResult.rows[0].id;
-      log(9.3, "New profile created", { profileId, subjectName, subjectDob });
+      log(9.2, "New profile created", { profileId, subjectName, subjectDob });
     }
 
-    // ── 6. Handle paid reading per MODE setting ─────────────────
-    log(10, "Calling handlePaidReading (respects PAID_REPORT_DELIVERY_MODE)");
+    // ── 6. Handle paid reading ──────────────────────────────────
+    log(10, "Calling handlePaidReading");
     const readingResult = await handlePaidReading(order, profile, profileId);
 
     log(11, "Paid reading handling complete", {
-      mode: readingResult.mode,
       readingId: readingResult.readingId,
-      status: readingResult.status,
-      message: readingResult.message,
+      status:    readingResult.status,
+      message:   readingResult.message,
     });
 
     console.log(
-      `[${FILE}] >>> Payment processed successfully | orderId=${order.id} readingId=${readingResult.readingId} mode=${readingResult.mode}`
+      `[${FILE}] >>> Payment processed successfully | orderId=${order.id} readingId=${readingResult.readingId}`
     );
   } catch (err) {
     console.error(

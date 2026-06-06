@@ -1,14 +1,27 @@
 // ============================================================
-//  src/routes/admin.js  v9
+//  src/routes/admin.js  v10
 //
-//  CHANGES from v8:
-//    - /admin/fulfilment query now LEFT JOINs numerology_profiles
-//      so that free readings (which have no order row) still get
-//      subject name, DOB, psychic number and destiny number.
-//    - COALESCE used for subject_name, subject_dob, subject_gender
-//      so paid readings still read from orders table (priority)
-//      and free readings fall back to numerology_profiles / customers.
-//    - All other endpoints unchanged.
+//  CHANGES (v9 → v10):
+//    - /admin/profiles query: removed WHERE is_primary = TRUE
+//      filter so ALL subject profiles are visible, not just
+//      the latest one per customer.
+//
+//      Why this matters:
+//        Paid reading profiles are now stored with
+//        is_primary = FALSE (webhook.js v5). The old filter
+//        hid every paid-reading profile except the first one
+//        that happened to be marked TRUE. Removing the filter
+//        shows all subjects (Abhi, Bharat, Chirag, Deeksha)
+//        for every customer.
+//
+//      Free reading profiles still use is_primary = TRUE for
+//      their "current active" profile — those are also shown
+//      now since we removed the filter entirely.
+//
+//    - /admin/export Profiles sheet: same fix applied so the
+//      exported sheet also shows all profiles.
+//
+//    All other endpoints unchanged from v9.
 // ============================================================
 
 const express = require("express");
@@ -66,18 +79,6 @@ router.get("/dashboard", async (req, res) => {
 
 // ────────────────────────────────────────────────────────────
 // FULFILMENT
-//
-// FIX v9: Added LEFT JOIN on numerology_profiles so that free
-// readings (which have no orders row) still return subject name,
-// DOB, psychic number and destiny number.
-//
-// Priority for subject fields (COALESCE left-to-right):
-//   1. orders table  — paid readings have subject_name/dob here
-//   2. numerology_profiles — free readings have name_used/dob_used here
-//   3. customers     — last resort fallback (full_name / dob)
-//
-// psychic_number and destiny_number come from numerology_profiles
-// directly (orders table never stores these).
 // ────────────────────────────────────────────────────────────
 router.get("/fulfilment", async (req, res) => {
   try {
@@ -175,6 +176,16 @@ router.get("/users", async (req, res) => { req.url = "/customers"; router.handle
 
 // ────────────────────────────────────────────────────────────
 // NUMEROLOGY PROFILES
+//
+// FIX v10: Removed WHERE is_primary = TRUE so all subject
+// profiles are shown — not just the latest one per customer.
+//
+// Paid reading profiles are stored with is_primary = FALSE
+// (webhook.js v5). The old filter was hiding all of them
+// except the very first one that happened to be TRUE.
+//
+// Sorted by customer (user_id) then calculated_at so you see
+// all subjects grouped together per customer.
 // ────────────────────────────────────────────────────────────
 router.get("/profiles", async (req, res) => {
   try {
@@ -213,7 +224,7 @@ router.get("/profiles", async (req, res) => {
         np.essence_number, np.schema_version, np.calculated_at, np.created_at
        FROM numerology_profiles np
        JOIN customers c ON c.id = np.user_id
-       WHERE np.is_primary = TRUE ORDER BY np.calculated_at DESC`
+       ORDER BY np.user_id, np.calculated_at DESC`
     );
     res.json({ count: rows.length, profiles: rows });
   } catch (err) { console.error(err); res.status(500).json({ error: "Failed to fetch profiles." }); }
@@ -304,6 +315,7 @@ router.get("/export", async (req, res) => {
          FROM orders o JOIN customers c ON c.id = o.user_id
          ORDER BY o.created_at ASC`
       ),
+      // FIX v10: removed WHERE is_primary = TRUE — show all subject profiles
       dbAll(
         `SELECT np.id, np.user_id, c.full_name, np.name_used, np.dob_used, np.is_primary,
                 np.psychic_number, np.psychic_compound, np.destiny_number, np.destiny_compound,
@@ -339,7 +351,7 @@ router.get("/export", async (req, res) => {
                 np.essence_number, np.schema_version, np.calculated_at, np.created_at
          FROM numerology_profiles np
          JOIN customers c ON c.id = np.user_id
-         WHERE np.is_primary = TRUE ORDER BY np.calculated_at ASC`
+         ORDER BY np.user_id, np.calculated_at ASC`
       ),
       dbAll(
         `SELECT id, full_name, dob, email, phone, gender, tier, locale, timezone,
@@ -478,8 +490,8 @@ router.get("/export", async (req, res) => {
       { key:"id",                   label:"Profile ID",           width:38 },
       { key:"user_id",              label:"User ID",              width:38 },
       { key:"full_name",            label:"Customer Name",        width:22 },
-      { key:"name_used",            label:"Name Used",            width:22 },
-      { key:"dob_used",             label:"DOB Used",             width:14 },
+      { key:"name_used",            label:"Subject Name",         width:22 },
+      { key:"dob_used",             label:"Subject DOB",          width:14 },
       { key:"is_primary",           label:"Is Primary",           width:10 },
       { key:"psychic_number",       label:"Psychic",              width:10 },
       { key:"psychic_compound",     label:"Psychic Compound",     width:16 },

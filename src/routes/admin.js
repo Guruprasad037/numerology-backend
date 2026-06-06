@@ -1,10 +1,14 @@
 // ============================================================
-//  src/routes/admin.js  v8
+//  src/routes/admin.js  v9
 //
-//  CHANGES from v7:
-//    - /admin/export  new endpoint — multi-sheet .xlsx export
-//      (Readings, Orders, Profiles, Customers) using SheetJS
-//    - All other endpoints unchanged
+//  CHANGES from v8:
+//    - /admin/fulfilment query now LEFT JOINs numerology_profiles
+//      so that free readings (which have no order row) still get
+//      subject name, DOB, psychic number and destiny number.
+//    - COALESCE used for subject_name, subject_dob, subject_gender
+//      so paid readings still read from orders table (priority)
+//      and free readings fall back to numerology_profiles / customers.
+//    - All other endpoints unchanged.
 // ============================================================
 
 const express = require("express");
@@ -61,7 +65,19 @@ router.get("/dashboard", async (req, res) => {
 });
 
 // ────────────────────────────────────────────────────────────
-// FULFILMENT — full join, ALL readings, ALL statuses
+// FULFILMENT
+//
+// FIX v9: Added LEFT JOIN on numerology_profiles so that free
+// readings (which have no orders row) still return subject name,
+// DOB, psychic number and destiny number.
+//
+// Priority for subject fields (COALESCE left-to-right):
+//   1. orders table  — paid readings have subject_name/dob here
+//   2. numerology_profiles — free readings have name_used/dob_used here
+//   3. customers     — last resort fallback (full_name / dob)
+//
+// psychic_number and destiny_number come from numerology_profiles
+// directly (orders table never stores these).
 // ────────────────────────────────────────────────────────────
 router.get("/fulfilment", async (req, res) => {
   try {
@@ -84,20 +100,23 @@ router.get("/fulfilment", async (req, res) => {
         r.report_sent_at,
         r.sent_by,
         r.admin_notes,
-CASE
-  WHEN r.report_content IS NOT NULL
-   AND (
-     r.report_content->>'html' IS NOT NULL        -- paid reading HTML report
-     OR r.report_content->>'html_source' IS NOT NULL
-     OR r.report_content->>'cards' IS NOT NULL    -- free reading cards JSON
-   )
-  THEN true ELSE false
-END AS has_report,        c.full_name         AS customer_full_name,
+        CASE
+          WHEN r.report_content IS NOT NULL
+           AND (r.report_content->>'html' IS NOT NULL
+             OR r.report_content->>'html_source' IS NOT NULL
+             OR r.report_content->>'cards' IS NOT NULL)
+          THEN true ELSE false
+        END                 AS has_report,
+
+        -- Customer fields (always available — c is an INNER JOIN)
+        c.full_name         AS customer_full_name,
         c.email,
         c.phone,
         c.dob               AS customer_dob,
         c.gender            AS customer_gender,
         c.tier,
+
+        -- Order fields (NULL for free readings — o is a LEFT JOIN)
         o.id                AS order_id_ref,
         o.product_name,
         o.amount,
@@ -109,13 +128,24 @@ END AS has_report,        c.full_name         AS customer_full_name,
         o.failure_reason,
         o.is_self,
         o.customer_name,
-        o.subject_name,
-        o.subject_dob,
-        o.subject_gender,
-        o.paid_at
+        o.paid_at,
+
+        -- Subject fields:
+        -- Paid reading  → comes from orders table (subject_name, subject_dob)
+        -- Free reading  → comes from numerology_profiles (name_used, dob_used)
+        -- Fallback      → customers table (full_name, dob)
+        COALESCE(o.subject_name,   np.name_used, c.full_name) AS subject_name,
+        COALESCE(o.subject_dob,    np.dob_used,  c.dob)       AS subject_dob,
+        COALESCE(o.subject_gender, c.gender)                  AS subject_gender,
+
+        -- Numerology numbers — only in numerology_profiles, never in orders
+        np.psychic_number,
+        np.destiny_number
+
        FROM readings r
        JOIN customers c ON c.id = r.user_id
        LEFT JOIN orders o ON o.id = r.order_id
+       LEFT JOIN numerology_profiles np ON np.id = r.profile_id
        ORDER BY r.created_at DESC`
     );
     res.json({ count: rows.length, readings: rows });
@@ -248,7 +278,6 @@ router.get("/export", async (req, res) => {
     const dateStr = now.toLocaleString("en-IN", { day:"2-digit", month:"short", year:"numeric", hour:"2-digit", minute:"2-digit" });
     const brand   = "Occult Pulse";
 
-    // ── fetch all 4 tables ──
     const [readings, orders, profiles, customers] = await Promise.all([
       dbAll(
         `SELECT r.id, r.user_id, r.profile_id, r.order_id,
@@ -321,21 +350,15 @@ router.get("/export", async (req, res) => {
 
     const wb = XLSX.utils.book_new();
 
-    // ── helper: build a sheet with a branded title block + data table ──
     function makeSheet(title, rows, colDefs) {
-      // title block rows
       const titleRows = [
         [brand],
         [title],
         [`Exported: ${dateStr}`],
         [`Total records: ${rows.length}`],
-        [], // blank spacer
+        [],
       ];
-
-      // header row
       const header = ["#", ...colDefs.map(c => c.label)];
-
-      // data rows
       const dataRows = rows.map((r, i) => [
         i + 1,
         ...colDefs.map(c => {
@@ -346,32 +369,19 @@ router.get("/export", async (req, res) => {
           return v;
         }),
       ]);
-
       const allRows = [...titleRows, header, ...dataRows];
       const ws = XLSX.utils.aoa_to_sheet(allRows);
-
-      // ── column widths ──
       const colWidths = [{ wch: 5 }, ...colDefs.map(c => ({ wch: Math.min(c.width || 20, 60) }))];
       ws["!cols"] = colWidths;
-
-      // ── styles via cell objects ──
-      const headerRowIdx = titleRows.length; // 0-based row index of header
-
-      // Brand name cell — large bold
+      const headerRowIdx = titleRows.length;
       const brandCell = XLSX.utils.encode_cell({ r: 0, c: 0 });
       if (ws[brandCell]) ws[brandCell].s = { font: { bold: true, sz: 16, color: { rgb: "B5621E" } } };
-
-      // Sheet title cell — bold
       const titleCell = XLSX.utils.encode_cell({ r: 1, c: 0 });
       if (ws[titleCell]) ws[titleCell].s = { font: { bold: true, sz: 13 } };
-
-      // Meta cells — italic grey
       for (let r = 2; r <= 3; r++) {
         const cell = XLSX.utils.encode_cell({ r, c: 0 });
         if (ws[cell]) ws[cell].s = { font: { italic: true, color: { rgb: "9E9086" } } };
       }
-
-      // Header row — bold white on dark background
       for (let c = 0; c < header.length; c++) {
         const cell = XLSX.utils.encode_cell({ r: headerRowIdx, c });
         if (ws[cell]) {
@@ -379,14 +389,10 @@ router.get("/export", async (req, res) => {
             font: { bold: true, color: { rgb: "FFFFFF" } },
             fill: { fgColor: { rgb: "2C1F14" } },
             alignment: { horizontal: "center", wrapText: true },
-            border: {
-              bottom: { style: "thin", color: { rgb: "B5621E" } },
-            },
+            border: { bottom: { style: "thin", color: { rgb: "B5621E" } } },
           };
         }
       }
-
-      // Data rows — alternating background + wrap long text
       dataRows.forEach((_, i) => {
         const rowIdx = headerRowIdx + 1 + i;
         const bg = i % 2 === 0 ? "FFFFFF" : "F9F8F6";
@@ -396,21 +402,16 @@ router.get("/export", async (req, res) => {
             ws[cell].s = {
               fill: { fgColor: { rgb: bg } },
               alignment: { vertical: "top", wrapText: true },
-              border: {
-                bottom: { style: "hair", color: { rgb: "E4E2DE" } },
-              },
+              border: { bottom: { style: "hair", color: { rgb: "E4E2DE" } } },
             };
           }
         }
-        // serial number cell — bold amber
         const snCell = XLSX.utils.encode_cell({ r: rowIdx, c: 0 });
         if (ws[snCell]) ws[snCell].s = { ...ws[snCell].s, font: { bold: true, color: { rgb: "B5621E" } } };
       });
-
       return ws;
     }
 
-    // ── Sheet 1: Readings ──
     const readingCols = [
       { key:"id",                 label:"Reading ID",     width:38 },
       { key:"user_id",            label:"User ID",        width:38 },
@@ -440,7 +441,6 @@ router.get("/export", async (req, res) => {
     wb.SheetNames.push("Readings");
     wb.Sheets["Readings"] = makeSheet("Readings", readings, readingCols);
 
-    // ── Sheet 2: Orders ──
     const orderCols = [
       { key:"id",                 label:"Order ID",         width:38 },
       { key:"user_id",            label:"User ID",          width:38 },
@@ -454,7 +454,7 @@ router.get("/export", async (req, res) => {
       { key:"is_self",            label:"Is Self",          width:10 },
       { key:"product_slug",       label:"Product Slug",     width:24 },
       { key:"product_name",       label:"Product Name",     width:26 },
-      { key:"amount",             label:"Amount (paise)",   width:16, get: r => r.amount != null ? r.amount / 100 : "" },
+      { key:"amount",             label:"Amount (₹)",       width:16, get: r => r.amount != null ? r.amount / 100 : "" },
       { key:"discount_amount",    label:"Discount",         width:14, get: r => r.discount_amount != null ? r.discount_amount / 100 : "" },
       { key:"final_amount",       label:"Final Amount ₹",   width:16, get: r => r.final_amount != null ? r.final_amount / 100 : "" },
       { key:"currency",           label:"Currency",         width:10 },
@@ -474,7 +474,6 @@ router.get("/export", async (req, res) => {
     wb.SheetNames.push("Orders");
     wb.Sheets["Orders"] = makeSheet("Orders", orders, orderCols);
 
-    // ── Sheet 3: Numerology Profiles ──
     const profileCols = [
       { key:"id",                   label:"Profile ID",           width:38 },
       { key:"user_id",              label:"User ID",              width:38 },
@@ -575,7 +574,6 @@ router.get("/export", async (req, res) => {
     wb.SheetNames.push("Numerology Profiles");
     wb.Sheets["Numerology Profiles"] = makeSheet("Numerology Profiles", profiles, profileCols);
 
-    // ── Sheet 4: Customers ──
     const customerCols = [
       { key:"id",         label:"Customer ID", width:38 },
       { key:"full_name",  label:"Full Name",   width:22 },
@@ -593,7 +591,6 @@ router.get("/export", async (req, res) => {
     wb.SheetNames.push("Customers");
     wb.Sheets["Customers"] = makeSheet("Customers", customers, customerCols);
 
-    // ── write and send ──
     const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx", cellStyles: true });
     const filename = `occult-pulse-export-${now.toISOString().slice(0,10)}.xlsx`;
     console.log(`[admin.js] >>> XLSX export | sheets=4 | file="${filename}" | size=${buf.length}`);

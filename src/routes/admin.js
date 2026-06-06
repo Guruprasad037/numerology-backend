@@ -84,13 +84,15 @@ router.get("/fulfilment", async (req, res) => {
         r.report_sent_at,
         r.sent_by,
         r.admin_notes,
-        CASE
-          WHEN r.report_content IS NOT NULL
-           AND (r.report_content->>'html' IS NOT NULL
-             OR r.report_content->>'html_source' IS NOT NULL)
-          THEN true ELSE false
-        END                 AS has_report,
-        c.full_name         AS customer_full_name,
+CASE
+  WHEN r.report_content IS NOT NULL
+   AND (
+     r.report_content->>'html' IS NOT NULL        -- paid reading HTML report
+     OR r.report_content->>'html_source' IS NOT NULL
+     OR r.report_content->>'cards' IS NOT NULL    -- free reading cards JSON
+   )
+  THEN true ELSE false
+END AS has_report,        c.full_name         AS customer_full_name,
         c.email,
         c.phone,
         c.dob               AS customer_dob,

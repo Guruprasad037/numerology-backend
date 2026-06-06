@@ -65,11 +65,14 @@ async function generate(name, dob) {
       fallbackFired: engineConfig !== engineUsed,
     });
 
-    // Fire-and-forget DB save — pass BOTH engine values
-    saveReading(name, dob, profile, interpretations, engineConfig, engineUsed).catch(err =>
-      console.error(`[${FILE}] DB save failed (non-fatal):`, err.message)
-    );
-    log(5, 'DB save triggered (non-blocking)', { engineConfig, engineUsed });
+// Fire-and-forget DB save.
+// `name` and `dob` here are the SUBJECT's details — whoever's
+// name was typed into the free reading form. There is no
+// "customer" in a free reading; the subject is all we know.
+saveReading(name, dob, profile, interpretations, engineConfig, engineUsed).catch(err =>
+  console.error(`[${FILE}] DB save failed (non-fatal):`, err.message)
+);
+log(5, 'DB save triggered (non-blocking) — subject saved', { subjectName: name, subjectDob: dob, engineConfig, engineUsed });
 
     const isV1 = Array.isArray(interpretations?.cards);
     log(6, 'Engine version detected', { isV1 });

@@ -1,16 +1,25 @@
+
 // ============================================================
 //  src/services/reading-db.js
-//  v2 — accepts explicit engineConfig + engineUsed parameters
+//  v3 — renamed params to subjectName/subjectDob for clarity
 //
-//  CHANGE from v1:
-//    - saveReading() now accepts two new parameters:
-//        engineConfig  (what reading.settings.js requested)
-//        engineUsed    (what actually ran — may differ if fallback fired)
-//    - Both are written to the readings table
-//    - Falls back gracefully if not provided (old callers safe)
-//    - Removed the internal engine resolution that caused the bug
-//      (previously resolved engine from settings here, which always
-//       returned the configured engine even when fallback had fired)
+//  TERMINOLOGY (free reading has NO customer concept):
+//    subject     — the person whose numerology is being calculated.
+//                  In free reading, this is whoever's name+DOB was
+//                  typed into the form. We don't know who the
+//                  visitor is, and we don't need to.
+//    customer    — only exists in PAID reading (the person who pays).
+//                  Never used here.
+//
+//  The `customers` table is used to store subject data for free
+//  readings purely because it is the right shape (name + dob).
+//  The table name is a misnomer in this context; no schema change
+//  is needed or intended.
+//
+//  CHANGES from v2:
+//    - saveReading() params renamed: name→subjectName, dob→subjectDob
+//    - Internal variables renamed to match
+//    - Comments updated throughout for clarity
 // ============================================================
 
 const { dbAll, dbGet, dbRun } = require('../config/db');
@@ -23,26 +32,30 @@ function log(step, message, data = null) {
 }
 
 // ── saveReading ──────────────────────────────────────────────
-// Parameters:
-//   name          — full name string
-//   dob           — "YYYY-MM-DD"
-//   profile       — full 90-field numerology profile object
-//   interpretations — result from dispatcher (cards, cta, etc.)
-//   engineConfig  — what was configured (e.g. "claude")    ← NEW
-//   engineUsed    — what actually ran (e.g. "hardcoded")   ← NEW
+// Called after every free reading generation (fire-and-forget).
 //
-// engineConfig and engineUsed are optional for backwards compatibility.
-// If not provided, both default to settings.defaultEngine (old behaviour).
-async function saveReading(name, dob, profile, interpretations, engineConfig, engineUsed) {
-  log(1, 'saveReading() called', { name, dob });
+// Parameters:
+//   subjectName     — name typed into the free reading form.
+//                     This is the SUBJECT of the reading, not
+//                     necessarily the person visiting the site.
+//   subjectDob      — "YYYY-MM-DD" — subject's date of birth.
+//   profile         — full 90-field numerology profile object.
+//   interpretations — result from dispatcher (cards, cta, etc.)
+//   engineConfig    — what engine was configured (e.g. "claude")
+//   engineUsed      — what engine actually ran (e.g. "hardcoded"
+//                     if Claude fell back)
+//
+// engineConfig and engineUsed are optional for backwards compat.
+// If not provided, both default to settings.defaultEngine.
+async function saveReading(subjectName, subjectDob, profile, interpretations, engineConfig, engineUsed) {
+  log(1, 'saveReading() called', { subjectName, subjectDob });
   console.log(
-    `[${FILE}] >>> ENTER saveReading() | name="${name}" dob="${dob}" engineConfig=${engineConfig} engineUsed=${engineUsed}`
+    `[${FILE}] >>> ENTER saveReading() | subjectName="${subjectName}" subjectDob="${subjectDob}" engineConfig=${engineConfig} engineUsed=${engineUsed}`
   );
 
   // ── Resolve engine values ────────────────────────────────
-  // Use the explicitly passed values when available.
-  // Fall back to settings.defaultEngine for backwards compatibility
-  // (in case saveReading is called from somewhere without the new params).
+  // Use explicitly passed values when available.
+  // Fall back to settings.defaultEngine for backwards compat.
   const resolvedEngineConfig = engineConfig || settings.defaultEngine || 'unknown';
   const resolvedEngineUsed   = engineUsed   || engineConfig || settings.defaultEngine || 'unknown';
 
@@ -51,135 +64,126 @@ async function saveReading(name, dob, profile, interpretations, engineConfig, en
   );
 
   try {
-    // ── Step 2: Check existing customer ─────────────────────
-    log(2, 'Checking if customer exists');
-    console.log(`[${FILE}] >>> STEP 2 START: dbGet() — checking existing customer`);
+    // ── Step 2: Check if this subject already has a record ───
+    // We match on subjectName + subjectDob because that is all
+    // we know about the subject in a free reading. No email,
+    // no phone, no login — just name and date of birth.
+    log(2, 'Checking if subject already exists in customers table');
+    console.log(`[${FILE}] >>> STEP 2 START: dbGet() — checking existing subject record`);
 
-    let userId;
+    let subjectRecordId;
     const existing = await dbGet(
       `SELECT id FROM customers
        WHERE full_name = $1 AND dob = $2 AND deleted_at IS NULL
        LIMIT 1`,
-      [name, dob]
+      [subjectName, subjectDob]
     );
 
-    console.log(`[${FILE}] >>> STEP 2 DONE: customer query returned | found=${!!existing}`);
+    console.log(`[${FILE}] >>> STEP 2 DONE: subject query returned | found=${!!existing}`);
 
     if (existing) {
-      userId = existing.id;
-      log(3, 'Existing customer found', { customerId: userId });
-      console.log(`[${FILE}] >>> STEP 3 SKIP: customer already exists | customerId=${userId}`);
+      subjectRecordId = existing.id;
+      log(3, 'Existing subject record found — reusing', { subjectRecordId });
+      console.log(`[${FILE}] >>> STEP 3 SKIP: subject already exists | subjectRecordId=${subjectRecordId}`);
     } else {
-      // ── Step 4: Create new customer ───────────────────────
-      log(4, 'Creating new customer');
-      const newCustomer = await dbRun(
+      // ── Step 4: Create new subject record ─────────────────
+      // Stored in the `customers` table for schema convenience.
+      // tier='free_reading' distinguishes these from paying
+      // customers (tier='paid_reading').
+      log(4, 'Creating new subject record in customers table');
+      const newRecord = await dbRun(
         `INSERT INTO customers (full_name, dob, tier, created_at)
          VALUES ($1, $2, 'free_reading', NOW())
          RETURNING id`,
-        [name, dob]
+        [subjectName, subjectDob]
       );
-      userId = newCustomer.rows?.[0]?.id || newCustomer.lastID;
-      log(4, 'New customer created', { customerId: userId });
+      subjectRecordId = newRecord.rows?.[0]?.id || newRecord.lastID;
+      log(4, 'New subject record created', { subjectRecordId });
     }
 
-    console.log(`[${FILE}] >>> userId resolved | userId=${userId}`);
+    console.log(`[${FILE}] >>> subjectRecordId resolved | subjectRecordId=${subjectRecordId}`);
 
     // ── Step 5: Demote previous primary profile ──────────────
-    log(5, 'Demoting previous primary profile');
-    console.log(
-      `[${FILE}] >>> STEP 5 START: dbRun() — demoting existing primary profile for userId=${userId}`
-    );
+    // Each subject keeps only one active (is_primary=TRUE) profile.
+    // If they run the free reading again with the same name+DOB,
+    // the old profile is demoted and a fresh one is inserted.
+    log(5, 'Demoting previous primary profile for this subject');
     await dbRun(
       `UPDATE numerology_profiles
        SET is_primary = FALSE
        WHERE user_id = $1 AND is_primary = TRUE`,
-      [userId]
+      [subjectRecordId]
     );
-    console.log(`[${FILE}] >>> STEP 5 DONE: demote query completed`);
 
     // ── Step 6: Insert numerology profile ───────────────────
+    // user_id here refers to the subject's record id, NOT a
+    // paying customer. The foreign key name is a schema artifact.
     log(6, 'Inserting numerology profile (v3, 89 params)');
-    console.log(
-      `[${FILE}] >>> STEP 6 START: dbRun() — inserting numerology profile | userId=${userId} name="${name}"`
-    );
 
     const p = profile;
     const profileResult = await dbRun(
       `INSERT INTO numerology_profiles (
-        user_id,        -- $1
-        name_used,      -- $2
-        dob_used,       -- $3
+        user_id,        -- $1  (subject's record id)
+        name_used,      -- $2  (subject's name)
+        dob_used,       -- $3  (subject's dob)
         is_primary,     -- TRUE (hardcoded)
-        psychic_number,       psychic_compound,        -- $4  $5
-        destiny_number,       destiny_compound,        -- $6  $7
-        name_number,          name_compound,           -- $8  $9
-        soul_urge_number,     soul_urge_compound,      -- $10 $11
-        personality_number,   personality_compound,    -- $12 $13
-        maturity_number,      maturity_compound,       -- $14 $15
-        power_number,         power_compound,          -- $16 $17
-        ruling_planet,        pd_combination,          -- $18 $19
-        life_path_number,     life_path_compound,      -- $20 $21
-        birth_day_number,     birth_month_number,
-        birth_year_number,                             -- $22 $23 $24
-        personal_year_number,  personal_month_number,
-        personal_day_number,                           -- $25 $26 $27
-        universal_year_number, universal_month_number, -- $28 $29
-        pinnacle_1, pinnacle_1_start_age, pinnacle_1_end_age,  -- $30 $31 $32
-        pinnacle_2, pinnacle_2_start_age, pinnacle_2_end_age,  -- $33 $34 $35
-        pinnacle_3, pinnacle_3_start_age, pinnacle_3_end_age,  -- $36 $37 $38
-        pinnacle_4, pinnacle_4_start_age,                      -- $39 $40
-        current_pinnacle,                                      -- $41
-        challenge_1, challenge_2, challenge_3, challenge_4,    -- $42 $43 $44 $45
-        current_challenge,                                     -- $46
-        life_period_1, life_period_1_end_age,                  -- $47 $48
-        life_period_2, life_period_2_end_age,                  -- $49 $50
-        life_period_3, current_life_period,                    -- $51 $52
-        cornerstone,   cornerstone_value,                      -- $53 $54
-        capstone,      capstone_value,                         -- $55 $56
-        first_vowel,   first_vowel_value,                      -- $57 $58
-        subconscious_self,                                     -- $59
-        hidden_passions,  karmic_lessons, missing_numbers,     -- $60 $61 $62
-        has_karmic_debt,                                       -- $63
-        karmic_debt_numbers, karmic_debt_locations,            -- $64 $65
-        has_master_11, has_master_22, has_master_33,           -- $66 $67 $68
-        master_numbers_found,                                  -- $69
-        plane_mental_count,    plane_physical_count,           -- $70 $71
-        plane_emotional_count, plane_intuitive_count,          -- $72 $73
-        plane_mental_number,   plane_physical_number,          -- $74 $75
-        plane_emotional_number, plane_intuitive_number,        -- $76 $77
-        dominant_plane,                                        -- $78
-        soul_expression_bridge, life_personality_bridge,       -- $79 $80
-        rational_thought_number, balance_number,               -- $81 $82
-        physical_transit,  physical_transit_value,             -- $83 $84
-        mental_transit,    mental_transit_value,               -- $85 $86
-        spiritual_transit, spiritual_transit_value,            -- $87 $88
-        essence_number,                                        -- $89
-        schema_version, calculated_at  -- hardcoded
+        psychic_number,       psychic_compound,
+        destiny_number,       destiny_compound,
+        name_number,          name_compound,
+        soul_urge_number,     soul_urge_compound,
+        personality_number,   personality_compound,
+        maturity_number,      maturity_compound,
+        power_number,         power_compound,
+        ruling_planet,        pd_combination,
+        life_path_number,     life_path_compound,
+        birth_day_number,     birth_month_number,   birth_year_number,
+        personal_year_number, personal_month_number,personal_day_number,
+        universal_year_number,universal_month_number,
+        pinnacle_1, pinnacle_1_start_age, pinnacle_1_end_age,
+        pinnacle_2, pinnacle_2_start_age, pinnacle_2_end_age,
+        pinnacle_3, pinnacle_3_start_age, pinnacle_3_end_age,
+        pinnacle_4, pinnacle_4_start_age,
+        current_pinnacle,
+        challenge_1, challenge_2, challenge_3, challenge_4,
+        current_challenge,
+        life_period_1, life_period_1_end_age,
+        life_period_2, life_period_2_end_age,
+        life_period_3, current_life_period,
+        cornerstone,   cornerstone_value,
+        capstone,      capstone_value,
+        first_vowel,   first_vowel_value,
+        subconscious_self,
+        hidden_passions,  karmic_lessons, missing_numbers,
+        has_karmic_debt,
+        karmic_debt_numbers, karmic_debt_locations,
+        has_master_11, has_master_22, has_master_33,
+        master_numbers_found,
+        plane_mental_count,    plane_physical_count,
+        plane_emotional_count, plane_intuitive_count,
+        plane_mental_number,   plane_physical_number,
+        plane_emotional_number,plane_intuitive_number,
+        dominant_plane,
+        soul_expression_bridge, life_personality_bridge,
+        rational_thought_number, balance_number,
+        physical_transit,  physical_transit_value,
+        mental_transit,    mental_transit_value,
+        spiritual_transit, spiritual_transit_value,
+        essence_number,
+        schema_version, calculated_at
       ) VALUES (
         $1, $2, $3, TRUE,
-        $4,  $5,  $6,  $7,  $8,  $9,  $10, $11,
-        $12, $13, $14, $15, $16, $17,
-        $18, $19,
-        $20, $21, $22, $23, $24,
-        $25, $26, $27, $28, $29,
-        $30, $31, $32,
-        $33, $34, $35,
-        $36, $37, $38,
-        $39, $40, $41,
-        $42, $43, $44, $45, $46,
-        $47, $48, $49, $50, $51, $52,
-        $53, $54, $55, $56, $57, $58,
-        $59, $60, $61, $62,
-        $63, $64, $65,
-        $66, $67, $68, $69,
-        $70, $71, $72, $73,
-        $74, $75, $76, $77, $78,
-        $79, $80, $81, $82,
-        $83, $84, $85, $86, $87, $88, $89,
+        $4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
+        $18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,
+        $30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,
+        $42,$43,$44,$45,$46,$47,$48,$49,$50,$51,$52,
+        $53,$54,$55,$56,$57,$58,$59,$60,$61,$62,
+        $63,$64,$65,$66,$67,$68,$69,
+        $70,$71,$72,$73,$74,$75,$76,$77,$78,
+        $79,$80,$81,$82,$83,$84,$85,$86,$87,$88,$89,
         3, NOW()
       ) RETURNING id`,
       [
-        userId, name, dob,
+        subjectRecordId, subjectName, subjectDob,
         p.psychic_number,      p.psychic_compound,
         p.destiny_number,      p.destiny_compound,
         p.name_number,         p.name_compound,
@@ -227,17 +231,11 @@ async function saveReading(name, dob, profile, interpretations, engineConfig, en
 
     const profileId = profileResult.rows?.[0]?.id || profileResult.lastID;
     log(7, 'Profile inserted', { profileId });
-    console.log(
-      `[${FILE}] >>> STEP 6 DONE: numerology profile inserted | profileId=${profileId}`
-    );
 
     // ── Step 8: Insert reading record ───────────────────────
+    // Links the subject record + profile + the raw interpreter
+    // output together for admin review / future reference.
     log(8, 'Inserting reading record');
-    console.log(
-      `[${FILE}] >>> STEP 8 START: dbRun() — inserting reading record | userId=${userId} profileId=${profileId}`
-    );
-
-    // Log which engine was actually used vs configured
     console.log(
       `[${FILE}] >>> STEP 8 engine recorded | engine_config="${resolvedEngineConfig}" engine_used="${resolvedEngineUsed}"`
     );
@@ -255,19 +253,17 @@ async function saveReading(name, dob, profile, interpretations, engineConfig, en
          'en', NOW(), NOW()
        )`,
       [
-        userId,
+        subjectRecordId,         // subject's record id (not a paying customer)
         profileId,
         JSON.stringify(interpretations),
-        resolvedEngineConfig,   // ← what was configured
-        resolvedEngineUsed,     // ← what actually ran
+        resolvedEngineConfig,
+        resolvedEngineUsed,
       ]
     );
 
-    console.log(`[${FILE}] >>> STEP 8 DONE: reading record inserted`);
-
-    log(9, 'Reading saved successfully', { userId, profileId });
+    log(9, 'Reading saved successfully', { subjectRecordId, profileId });
     console.log(
-      `[${FILE}] >>> EXIT saveReading() SUCCESS | userId=${userId} profileId=${profileId}`
+      `[${FILE}] >>> EXIT saveReading() SUCCESS | subjectRecordId=${subjectRecordId} profileId=${profileId}`
     );
 
   } catch (err) {

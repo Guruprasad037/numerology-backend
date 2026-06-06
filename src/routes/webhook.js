@@ -1,13 +1,34 @@
 // ============================================================
 //  src/routes/webhook.js
-//  v3 — Integrated with paid-reading service
+//  v4 — Fixed subject-aware numerology profile lookup
 //
-//  CHANGE from v2:
-//    - Calls paid-reading.handlePaidReading() instead of inline logic
-//    - Respects PAID_REPORT_DELIVERY_MODE setting
-//    - MODE 1: Reading inserted as pending
-//    - MODE 2: Reading auto-generated as generated + DOCX created
+//  BUG FIXED (v3 → v4):
+//    In v3, Step 9 checked for an existing numerology_profile
+//    using only `user_id` (the CUSTOMER's ID — e.g. Gajendra).
+//
+//    This meant: if Gajendra ordered for Abhi first, a profile
+//    was created with user_id=Gajendra, is_primary=TRUE.
+//    When Gajendra later ordered for Bharat, Step 9 found
+//    Abhi's profile (same user_id, is_primary=TRUE) and reused
+//    it — so Bharat's reading row ended up linked to Abhi's
+//    numerology profile. Wrong profile, wrong numbers.
+//
+//  THE FIX:
+//    Step 9 now matches on (user_id + name_used + dob_used).
+//    - Same customer, same subject → reuse existing profile
+//      (handles duplicate webhook delivery / repurchase safely)
+//    - Same customer, different subject → demote the current
+//      primary profile (satisfies the UNIQUE index on user_id
+//      WHERE is_primary=TRUE), then insert a fresh profile for
+//      the new subject.
+//
+//  This is the same pattern already used correctly in
+//  src/services/reading-db.js for free readings.
+//
+//  NOTHING ELSE CHANGED — all other routes, services, and the
+//  free reading path are completely unaffected.
 // ============================================================
+
 const express = require("express");
 const router = express.Router();
 const crypto = require("crypto");
@@ -116,6 +137,9 @@ router.post("/", async (req, res) => {
     );
 
     // ── 4. Build numerology profile ─────────────────────────────
+    // subject_name / subject_dob are the SUBJECT's details
+    // (the person whose numbers are being read — may differ
+    // from the customer who paid, when is_self = false).
     const subjectName = order.subject_name || order.customer_full_name;
     const rawDob = order.subject_dob || order.customer_dob;
     const subjectDob =
@@ -123,25 +147,77 @@ router.post("/", async (req, res) => {
         ? rawDob.toISOString().split("T")[0]
         : String(rawDob);
 
-    log(8, "Building numerology profile");
+    log(8, "Building numerology profile", { subjectName, subjectDob });
     const profile = buildNumerologyProfile(subjectName, subjectDob);
 
-    // ── 5. Create or get profile record ─────────────────────────
-    log(9, "Checking for existing numerology profile");
-    const existing = await dbGet(
+    // ── 5. Create or get numerology profile record ──────────────
+    //
+    // FIX (v4): Match on (user_id + name_used + dob_used) — NOT
+    // just user_id.
+    //
+    // Why this matters:
+    //   The `numerology_profiles` table has a UNIQUE index on
+    //   user_id WHERE is_primary = TRUE. user_id here is the
+    //   CUSTOMER (e.g. Gajendra), not the subject. So if
+    //   Gajendra orders for two different subjects (Abhi, Bharat),
+    //   both orders share the same user_id. Checking only user_id
+    //   caused the second subject (Bharat) to reuse the first
+    //   subject's (Abhi's) profile — wrong numbers in the report.
+    //
+    //   By matching name_used + dob_used as well, we correctly
+    //   distinguish "same customer, same subject" (reuse) from
+    //   "same customer, different subject" (new profile needed).
+    //
+    // Duplicate webhook safety:
+    //   If Razorpay fires payment.captured twice for the same
+    //   order, the `order.status === 'paid'` check above already
+    //   short-circuits before we ever reach this step. The
+    //   name+dob match here is a second safety net.
+    // ────────────────────────────────────────────────────────────
+    log(9, "Checking for existing numerology profile for this subject", {
+      user_id: order.user_id,
+      subjectName,
+      subjectDob,
+    });
+
+    const existingForSubject = await dbGet(
       `SELECT id FROM numerology_profiles
-       WHERE user_id = $1 AND is_primary = TRUE LIMIT 1`,
-      [order.user_id]
+       WHERE user_id  = $1
+         AND name_used = $2
+         AND dob_used  = $3
+       LIMIT 1`,
+      [order.user_id, subjectName, subjectDob]
     );
 
     let profileId;
 
-    if (existing) {
-      profileId = existing.id;
-      log(9.1, "Using existing profile", { profileId });
+    if (existingForSubject) {
+      // Same customer + same subject → reuse the existing profile.
+      // This covers: duplicate webhook delivery, or the same
+      // customer repurchasing a reading for the same person.
+      profileId = existingForSubject.id;
+      log(9.1, "Reusing existing profile — same customer + same subject", {
+        profileId,
+        subjectName,
+        subjectDob,
+      });
+
     } else {
-      // ── Insert new numerology profile ────────────────────────
-      log(9.2, "Creating new numerology profile");
+      // Different subject under the same customer (or first ever
+      // order for this customer). Demote any existing primary
+      // profile first so the UNIQUE index doesn't block the insert.
+      log(9.2, "New subject detected — demoting current primary profile (if any)", {
+        user_id: order.user_id,
+      });
+      await dbRun(
+        `UPDATE numerology_profiles
+         SET is_primary = FALSE
+         WHERE user_id = $1 AND is_primary = TRUE`,
+        [order.user_id]
+      );
+
+      // Insert fresh numerology profile for this subject.
+      log(9.3, "Inserting new numerology profile", { subjectName, subjectDob });
       const p = profile;
       const profileResult = await dbRun(
         `INSERT INTO numerology_profiles (
@@ -292,7 +368,7 @@ router.post("/", async (req, res) => {
         ]
       );
       profileId = profileResult.rows[0].id;
-      log(9.2, "Profile created", { profileId });
+      log(9.3, "New profile created", { profileId, subjectName, subjectDob });
     }
 
     // ── 6. Handle paid reading per MODE setting ─────────────────

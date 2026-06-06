@@ -1,12 +1,11 @@
 // ============================================================
-//  src/routes/admin.js  v5
+//  src/routes/admin.js  v6
 //
-//  CHANGES from v4:
-//    - /readings/:id/report-docx  added — converts stored HTML
-//      to .docx via html-docx-js and downloads
-//    - /readings/:id/status       added — simple status + notes
-//      update (generated ↔ delivered) without requiring email
-//    - mark-sent, notes, report-html, all other endpoints unchanged
+//  CHANGES from v5:
+//    - Fixed jsonb parsing bug: report_content comes back from
+//      pg as an already-parsed object (jsonb), not a string.
+//      Both report-html and report-docx now handle both cases.
+//    - /readings/:id/status endpoint unchanged
 // ============================================================
 
 const express = require("express");
@@ -22,6 +21,19 @@ try {
 }
 
 router.use(requireAdmin);
+
+// ────────────────────────────────────────────────────────────
+// Helper: safely parse report_content regardless of whether
+// pg returns it as a jsonb object or a JSON string
+// ────────────────────────────────────────────────────────────
+function parseReportContent(raw) {
+  if (!raw) return null;
+  if (typeof raw === "object") return raw;          // jsonb → already parsed
+  if (typeof raw === "string") {
+    try { return JSON.parse(raw); } catch { return null; }
+  }
+  return null;
+}
 
 // ────────────────────────────────────────────────────────────
 // DASHBOARD
@@ -95,7 +107,7 @@ router.get("/customers", async (req, res) => {
       tier && tier !== "all"
         ? await dbAll(
             `SELECT id, full_name, dob, email, phone, gender, tier, locale,
-                    created_at, deleted_at
+                    timezone, created_at, updated_at, deleted_at
              FROM customers
              WHERE tier = $1 AND deleted_at IS NULL
              ORDER BY created_at DESC`,
@@ -103,7 +115,7 @@ router.get("/customers", async (req, res) => {
           )
         : await dbAll(
             `SELECT id, full_name, dob, email, phone, gender, tier, locale,
-                    created_at, deleted_at
+                    timezone, created_at, updated_at, deleted_at
              FROM customers
              WHERE deleted_at IS NULL
              ORDER BY created_at DESC`
@@ -133,7 +145,6 @@ router.get("/profiles", async (req, res) => {
         np.name_used,
         np.dob_used,
         np.is_primary,
-        np.schema_version,
         np.psychic_number,       np.psychic_compound,
         np.destiny_number,       np.destiny_compound,
         np.name_number,          np.name_compound,
@@ -141,19 +152,24 @@ router.get("/profiles", async (req, res) => {
         np.personality_number,   np.personality_compound,
         np.maturity_number,      np.maturity_compound,
         np.power_number,         np.power_compound,
-        np.life_path_number,     np.life_path_compound,
         np.ruling_planet,        np.pd_combination,
-        np.personal_year_number, np.personal_month_number,
-        np.universal_year_number,
-        np.pinnacle_1, np.pinnacle_1_end_age,
-        np.pinnacle_2, np.pinnacle_2_end_age,
-        np.pinnacle_3, np.pinnacle_3_end_age,
-        np.pinnacle_4,
+        np.life_path_number,     np.life_path_compound,
+        np.birth_day_number,     np.birth_month_number,   np.birth_year_number,
+        np.personal_year_number, np.personal_month_number, np.personal_day_number,
+        np.universal_year_number, np.universal_month_number,
+        np.pinnacle_1, np.pinnacle_1_start_age, np.pinnacle_1_end_age,
+        np.pinnacle_2, np.pinnacle_2_start_age, np.pinnacle_2_end_age,
+        np.pinnacle_3, np.pinnacle_3_start_age, np.pinnacle_3_end_age,
+        np.pinnacle_4, np.pinnacle_4_start_age,
         np.current_pinnacle,
-        np.challenge_1, np.challenge_2,
-        np.challenge_3, np.challenge_4,
+        np.challenge_1, np.challenge_2, np.challenge_3, np.challenge_4,
         np.current_challenge,
-        np.cornerstone, np.capstone, np.first_vowel,
+        np.life_period_1, np.life_period_1_end_age,
+        np.life_period_2, np.life_period_2_end_age,
+        np.life_period_3, np.current_life_period,
+        np.cornerstone, np.cornerstone_value,
+        np.capstone,    np.capstone_value,
+        np.first_vowel, np.first_vowel_value,
         np.subconscious_self,
         np.hidden_passions,
         np.karmic_lessons,
@@ -163,16 +179,20 @@ router.get("/profiles", async (req, res) => {
         np.karmic_debt_locations,
         np.has_master_11, np.has_master_22, np.has_master_33,
         np.master_numbers_found,
+        np.plane_mental_count,    np.plane_mental_number,
+        np.plane_physical_count,  np.plane_physical_number,
+        np.plane_emotional_count, np.plane_emotional_number,
+        np.plane_intuitive_count, np.plane_intuitive_number,
         np.dominant_plane,
-        np.plane_mental_count, np.plane_physical_count,
-        np.plane_emotional_count, np.plane_intuitive_count,
         np.soul_expression_bridge, np.life_personality_bridge,
         np.rational_thought_number, np.balance_number,
-        np.essence_number,
         np.physical_transit,  np.physical_transit_value,
         np.mental_transit,    np.mental_transit_value,
         np.spiritual_transit, np.spiritual_transit_value,
-        np.calculated_at
+        np.essence_number,
+        np.schema_version,
+        np.calculated_at,
+        np.created_at
        FROM numerology_profiles np
        JOIN customers c ON c.id = np.user_id
        WHERE np.is_primary = TRUE
@@ -194,7 +214,14 @@ router.get("/orders", async (req, res) => {
     const rows =
       status && status !== "all"
         ? await dbAll(
-            `SELECT o.*,
+            `SELECT o.id, o.user_id, o.product_slug, o.product_name,
+                    o.amount, o.currency, o.coupon_code, o.discount_amount,
+                    o.final_amount, o.status, o.gateway, o.gateway_order_id,
+                    o.gateway_payment_id, o.gateway_metadata, o.failure_reason,
+                    o.ip_address, o.country_code, o.notes,
+                    o.is_self, o.customer_name, o.subject_name,
+                    o.subject_dob, o.subject_gender,
+                    o.created_at, o.paid_at, o.refunded_at,
                     c.full_name AS customer_full_name, c.email, c.phone
              FROM orders o
              JOIN customers c ON c.id = o.user_id
@@ -203,7 +230,14 @@ router.get("/orders", async (req, res) => {
             [status]
           )
         : await dbAll(
-            `SELECT o.*,
+            `SELECT o.id, o.user_id, o.product_slug, o.product_name,
+                    o.amount, o.currency, o.coupon_code, o.discount_amount,
+                    o.final_amount, o.status, o.gateway, o.gateway_order_id,
+                    o.gateway_payment_id, o.gateway_metadata, o.failure_reason,
+                    o.ip_address, o.country_code, o.notes,
+                    o.is_self, o.customer_name, o.subject_name,
+                    o.subject_dob, o.subject_gender,
+                    o.created_at, o.paid_at, o.refunded_at,
                     c.full_name AS customer_full_name, c.email, c.phone
              FROM orders o
              JOIN customers c ON c.id = o.user_id
@@ -217,7 +251,7 @@ router.get("/orders", async (req, res) => {
 });
 
 // ────────────────────────────────────────────────────────────
-// READINGS
+// READINGS  — all 19 columns
 // ────────────────────────────────────────────────────────────
 router.get("/readings", async (req, res) => {
   try {
@@ -226,12 +260,14 @@ router.get("/readings", async (req, res) => {
       status && status !== "all"
         ? await dbAll(
             `SELECT r.id, r.user_id, r.profile_id, r.order_id,
-                    c.full_name AS customer_full_name, c.email,
-                    o.customer_name, o.subject_name, o.subject_dob, o.is_self,
-                    r.product_slug, r.status, r.engine_config, r.engine_used,
+                    r.product_slug, r.status,
                     r.report_content, r.report_text,
-                    r.delivered_to, r.generated_at, r.delivered_at, r.created_at,
-                    r.report_sent_at, r.sent_by, r.admin_notes
+                    r.engine_used, r.engine_model, r.engine_config,
+                    r.language, r.delivered_to,
+                    r.generated_at, r.delivered_at, r.created_at,
+                    r.report_sent_at, r.sent_by, r.admin_notes,
+                    c.full_name AS customer_full_name, c.email,
+                    o.customer_name, o.subject_name, o.subject_dob, o.is_self
              FROM readings r
              JOIN customers c ON c.id = r.user_id
              LEFT JOIN orders o ON o.id = r.order_id
@@ -241,12 +277,14 @@ router.get("/readings", async (req, res) => {
           )
         : await dbAll(
             `SELECT r.id, r.user_id, r.profile_id, r.order_id,
-                    c.full_name AS customer_full_name, c.email,
-                    o.customer_name, o.subject_name, o.subject_dob, o.is_self,
-                    r.product_slug, r.status, r.engine_config, r.engine_used,
+                    r.product_slug, r.status,
                     r.report_content, r.report_text,
-                    r.delivered_to, r.generated_at, r.delivered_at, r.created_at,
-                    r.report_sent_at, r.sent_by, r.admin_notes
+                    r.engine_used, r.engine_model, r.engine_config,
+                    r.language, r.delivered_to,
+                    r.generated_at, r.delivered_at, r.created_at,
+                    r.report_sent_at, r.sent_by, r.admin_notes,
+                    c.full_name AS customer_full_name, c.email,
+                    o.customer_name, o.subject_name, o.subject_dob, o.is_self
              FROM readings r
              JOIN customers c ON c.id = r.user_id
              LEFT JOIN orders o ON o.id = r.order_id
@@ -328,25 +366,24 @@ router.get("/readings/:id/report-html", async (req, res) => {
       return res.status(404).json({ error: "Reading not found." });
     }
 
-    let reportContent;
-    try {
-      reportContent = JSON.parse(reading.report_content || "{}");
-    } catch (e) {
-      return res.status(400).json({ error: "Invalid report format." });
+    const reportContent = parseReportContent(reading.report_content);
+
+    if (!reportContent) {
+      return res.status(400).json({ error: "No report content stored for this reading." });
     }
 
     const htmlContent = reportContent.html || reportContent.html_source || null;
 
     if (!htmlContent) {
       return res.status(400).json({
-        error: "No HTML report found. This reading was generated before HTML storage was added.",
+        error: "No HTML found in report. The report may have been generated in an older format.",
       });
     }
 
-    const fileName = reportContent.html_filename || "report.html";
+    const fileName = reportContent.html_filename || `reading-${req.params.id}.html`;
 
     console.log(
-      `[admin.js] >>> Sending HTML download | readingId=${req.params.id} | fileName="${fileName}" | size=${htmlContent.length}`
+      `[admin.js] >>> Sending HTML | readingId=${req.params.id} | size=${htmlContent.length}`
     );
 
     res.setHeader("Content-Type", "text/html; charset=utf-8");
@@ -354,13 +391,13 @@ router.get("/readings/:id/report-html", async (req, res) => {
     res.send(htmlContent);
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: "Failed to download report." });
+    res.status(500).json({ error: "Failed to download report: " + err.message });
   }
 });
 
 // ────────────────────────────────────────────────────────────
 // DOWNLOAD DOCX REPORT
-// Converts stored HTML → .docx via html-docx-js and downloads
+// Converts stored HTML → .docx via html-docx-js
 // ────────────────────────────────────────────────────────────
 router.get("/readings/:id/report-docx", async (req, res) => {
   try {
@@ -379,26 +416,26 @@ router.get("/readings/:id/report-docx", async (req, res) => {
       return res.status(404).json({ error: "Reading not found." });
     }
 
-    let reportContent;
-    try {
-      reportContent = JSON.parse(reading.report_content || "{}");
-    } catch (e) {
-      return res.status(400).json({ error: "Invalid report format." });
+    const reportContent = parseReportContent(reading.report_content);
+
+    if (!reportContent) {
+      return res.status(400).json({ error: "No report content stored for this reading." });
     }
 
     const htmlContent = reportContent.html || reportContent.html_source || null;
 
     if (!htmlContent) {
       return res.status(400).json({
-        error: "No HTML report found for this reading.",
+        error: "No HTML found in report. Cannot convert to DOCX.",
       });
     }
 
-    // html-docx-js requires a full HTML document string
-    // Wrap in a full HTML doc if it isn't already
+    // Ensure a full HTML document for html-docx-js
     let fullHtml = htmlContent;
-    if (!htmlContent.trim().toLowerCase().startsWith("<!doctype") &&
-        !htmlContent.trim().toLowerCase().startsWith("<html")) {
+    if (
+      !htmlContent.trim().toLowerCase().startsWith("<!doctype") &&
+      !htmlContent.trim().toLowerCase().startsWith("<html")
+    ) {
       fullHtml = `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>${htmlContent}</body></html>`;
     }
 
@@ -406,20 +443,16 @@ router.get("/readings/:id/report-docx", async (req, res) => {
       `[admin.js] >>> Converting HTML→DOCX | readingId=${req.params.id} | htmlSize=${fullHtml.length}`
     );
 
-    // Convert to DOCX buffer
-    const docxBuffer = htmlDocx.asBlob(fullHtml);
+    const docxResult = htmlDocx.asBlob(fullHtml);
 
-    // html-docx-js returns a Blob in browser, but in Node it returns a Buffer
-    // Handle both cases
     let buffer;
-    if (Buffer.isBuffer(docxBuffer)) {
-      buffer = docxBuffer;
-    } else if (docxBuffer && typeof docxBuffer.arrayBuffer === "function") {
-      // Blob-like object
-      const arrayBuf = await docxBuffer.arrayBuffer();
+    if (Buffer.isBuffer(docxResult)) {
+      buffer = docxResult;
+    } else if (docxResult && typeof docxResult.arrayBuffer === "function") {
+      const arrayBuf = await docxResult.arrayBuffer();
       buffer = Buffer.from(arrayBuf);
     } else {
-      buffer = Buffer.from(docxBuffer);
+      buffer = Buffer.from(docxResult);
     }
 
     const baseName = (reportContent.html_filename || `reading-${req.params.id}`)
@@ -427,7 +460,7 @@ router.get("/readings/:id/report-docx", async (req, res) => {
     const fileName = `${baseName}.docx`;
 
     console.log(
-      `[admin.js] >>> Sending DOCX download | readingId=${req.params.id} | fileName="${fileName}" | size=${buffer.length}`
+      `[admin.js] >>> Sending DOCX | readingId=${req.params.id} | fileName="${fileName}" | size=${buffer.length}`
     );
 
     res.setHeader(
@@ -438,13 +471,13 @@ router.get("/readings/:id/report-docx", async (req, res) => {
     res.send(buffer);
   } catch (err) {
     console.error("[admin.js] DOCX conversion error:", err);
-    res.status(500).json({ error: "Failed to convert report to DOCX: " + err.message });
+    res.status(500).json({ error: "Failed to convert to DOCX: " + err.message });
   }
 });
 
 // ────────────────────────────────────────────────────────────
-// UPDATE READING STATUS + NOTES (simple — no email required)
-// Allows toggling between 'generated' and 'delivered'
+// UPDATE READING STATUS + NOTES
+// generated ↔ delivered, no email required
 // ────────────────────────────────────────────────────────────
 router.post("/readings/:id/status", async (req, res) => {
   try {
@@ -457,7 +490,6 @@ router.post("/readings/:id/status", async (req, res) => {
       });
     }
 
-    // Build the update — if marking delivered, also set delivered_at and report_sent_at
     if (status === "delivered") {
       await dbRun(
         `UPDATE readings
@@ -468,8 +500,6 @@ router.post("/readings/:id/status", async (req, res) => {
          WHERE id = $2`,
         [admin_notes || "", req.params.id]
       );
-
-      // Upgrade customer tier if still free_reading
       await dbRun(
         `UPDATE customers
          SET tier       = 'paid_reading',
@@ -479,7 +509,6 @@ router.post("/readings/:id/status", async (req, res) => {
         [req.params.id]
       );
     } else {
-      // For reverting back to generated (or any other status)
       await dbRun(
         `UPDATE readings
          SET status      = $1,
@@ -490,9 +519,8 @@ router.post("/readings/:id/status", async (req, res) => {
     }
 
     console.log(
-      `[admin.js] >>> Reading status updated | readingId=${req.params.id} | newStatus=${status}`
+      `[admin.js] >>> Status updated | readingId=${req.params.id} | status=${status}`
     );
-
     res.json({ success: true, status });
   } catch (err) {
     console.error(err);
@@ -501,7 +529,7 @@ router.post("/readings/:id/status", async (req, res) => {
 });
 
 // ────────────────────────────────────────────────────────────
-// MARK READING AS SENT (legacy — keeps existing behaviour)
+// MARK READING AS SENT (used by Fulfilment Queue)
 // ────────────────────────────────────────────────────────────
 router.post("/readings/:id/mark-sent", async (req, res) => {
   try {
@@ -533,10 +561,7 @@ router.post("/readings/:id/mark-sent", async (req, res) => {
       [req.params.id]
     );
 
-    console.log(
-      `[admin.js] >>> Reading marked as delivered | readingId=${req.params.id}`
-    );
-
+    console.log(`[admin.js] >>> Marked delivered | readingId=${req.params.id}`);
     res.json({ success: true });
   } catch (err) {
     console.error(err);
@@ -545,7 +570,7 @@ router.post("/readings/:id/mark-sent", async (req, res) => {
 });
 
 // ────────────────────────────────────────────────────────────
-// SAVE ADMIN NOTES (without changing status)
+// SAVE ADMIN NOTES ONLY
 // ────────────────────────────────────────────────────────────
 router.post("/readings/:id/notes", async (req, res) => {
   try {
@@ -554,9 +579,7 @@ router.post("/readings/:id/notes", async (req, res) => {
       admin_notes,
       req.params.id,
     ]);
-
-    console.log(`[admin.js] >>> Admin notes saved | readingId=${req.params.id}`);
-
+    console.log(`[admin.js] >>> Notes saved | readingId=${req.params.id}`);
     res.json({ success: true });
   } catch (err) {
     console.error(err);
@@ -608,34 +631,20 @@ router.get("/leads/export", async (req, res) => {
     const csv = [
       header,
       ...rows.map((r) => [
-        r.id,
-        r.created_at,
+        r.id, r.created_at,
         `"${(r.full_name || "").replace(/"/g, '""')}"`,
-        r.email || "",
-        r.phone || "",
-        r.dob || "",
-        r.gender || "",
-        r.tier,
-        r.psychic_number ?? "",
-        r.psychic_compound ?? "",
-        r.destiny_number ?? "",
-        r.destiny_compound ?? "",
-        r.name_number ?? "",
-        r.name_compound ?? "",
-        r.soul_urge_number ?? "",
-        r.personality_number ?? "",
-        r.maturity_number ?? "",
-        r.power_number ?? "",
-        r.personal_year_number ?? "",
-        r.ruling_planet || "",
-        r.pd_combination || "",
-        r.has_karmic_debt ?? "",
+        r.email || "", r.phone || "", r.dob || "",
+        r.gender || "", r.tier,
+        r.psychic_number ?? "", r.psychic_compound ?? "",
+        r.destiny_number ?? "", r.destiny_compound ?? "",
+        r.name_number ?? "", r.name_compound ?? "",
+        r.soul_urge_number ?? "", r.personality_number ?? "",
+        r.maturity_number ?? "", r.power_number ?? "",
+        r.personal_year_number ?? "", r.ruling_planet || "",
+        r.pd_combination || "", r.has_karmic_debt ?? "",
         Array.isArray(r.karmic_debt_numbers) ? `"${r.karmic_debt_numbers.join(",")}"` : "",
-        r.has_master_11 ?? "",
-        r.has_master_22 ?? "",
-        r.has_master_33 ?? "",
-        r.current_pinnacle ?? "",
-        r.current_challenge ?? "",
+        r.has_master_11 ?? "", r.has_master_22 ?? "", r.has_master_33 ?? "",
+        r.current_pinnacle ?? "", r.current_challenge ?? "",
         r.dominant_plane || "",
         Array.isArray(r.missing_numbers) ? `"${r.missing_numbers.join(",")}"` : "",
         r.essence_number ?? "",

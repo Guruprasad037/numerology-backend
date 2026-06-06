@@ -20,8 +20,8 @@ console.log(`[${FILE}] loaded`);
 // ────────────────────────────────────────────────────────────
 // ENGINE CONFIGURATION
 // ────────────────────────────────────────────────────────────
-const FREE_READING_ENGINE = 'claude';  // 'claude' or 'hardcoded'
-const PAID_READING_ENGINE = 'claude';  // 'claude' or 'hardcoded'
+const FREE_READING_ENGINE = 'hardcoded';  // 'claude' or 'hardcoded'
+const PAID_READING_ENGINE = 'hardcoded';  // 'claude' or 'hardcoded'
 
 // Prompt versions — only used when engine = 'claude'
 const PROMPT_VERSIONS = {

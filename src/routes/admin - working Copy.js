@@ -1,25 +1,16 @@
 // ============================================================
-//  src/routes/admin.js  v5
+//  src/routes/admin.js  v4
 //
-//  CHANGES from v4:
-//    - /readings/:id/report-docx  added — converts stored HTML
-//      to .docx via html-docx-js and downloads
-//    - /readings/:id/status       added — simple status + notes
-//      update (generated ↔ delivered) without requiring email
-//    - mark-sent, notes, report-html, all other endpoints unchanged
+//  CHANGES from v3:
+//    - /readings/:id/report-docx  replaced with
+//      /readings/:id/report-html  — downloads .html file
+//    - mark-sent, notes, all other endpoints unchanged
 // ============================================================
 
 const express = require("express");
 const router = express.Router();
 const { dbAll, dbGet, dbRun } = require("../config/db");
 const { requireAdmin } = require("../middleware/auth");
-
-let htmlDocx;
-try {
-  htmlDocx = require("html-docx-js");
-} catch (e) {
-  console.warn("[admin.js] html-docx-js not available:", e.message);
-}
 
 router.use(requireAdmin);
 
@@ -230,8 +221,7 @@ router.get("/readings", async (req, res) => {
                     o.customer_name, o.subject_name, o.subject_dob, o.is_self,
                     r.product_slug, r.status, r.engine_config, r.engine_used,
                     r.report_content, r.report_text,
-                    r.delivered_to, r.generated_at, r.delivered_at, r.created_at,
-                    r.report_sent_at, r.sent_by, r.admin_notes
+                    r.delivered_to, r.generated_at, r.delivered_at, r.created_at
              FROM readings r
              JOIN customers c ON c.id = r.user_id
              LEFT JOIN orders o ON o.id = r.order_id
@@ -245,8 +235,7 @@ router.get("/readings", async (req, res) => {
                     o.customer_name, o.subject_name, o.subject_dob, o.is_self,
                     r.product_slug, r.status, r.engine_config, r.engine_used,
                     r.report_content, r.report_text,
-                    r.delivered_to, r.generated_at, r.delivered_at, r.created_at,
-                    r.report_sent_at, r.sent_by, r.admin_notes
+                    r.delivered_to, r.generated_at, r.delivered_at, r.created_at
              FROM readings r
              JOIN customers c ON c.id = r.user_id
              LEFT JOIN orders o ON o.id = r.order_id
@@ -316,6 +305,7 @@ router.get("/pending-paid", async (req, res) => {
 
 // ────────────────────────────────────────────────────────────
 // DOWNLOAD HTML REPORT
+// Returns the generated HTML file as a download
 // ────────────────────────────────────────────────────────────
 router.get("/readings/:id/report-html", async (req, res) => {
   try {
@@ -335,11 +325,13 @@ router.get("/readings/:id/report-html", async (req, res) => {
       return res.status(400).json({ error: "Invalid report format." });
     }
 
+    // Support both new format (html field) and old format (html_source)
+    // Old records from before v3 may only have html_source (truncated) or docx_base64
     const htmlContent = reportContent.html || reportContent.html_source || null;
 
     if (!htmlContent) {
       return res.status(400).json({
-        error: "No HTML report found. This reading was generated before HTML storage was added.",
+        error: "No HTML report found. This reading was generated before HTML storage was added. It cannot be downloaded — the data is a DOCX that failed to generate."
       });
     }
 
@@ -352,6 +344,7 @@ router.get("/readings/:id/report-html", async (req, res) => {
     res.setHeader("Content-Type", "text/html; charset=utf-8");
     res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
     res.send(htmlContent);
+
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to download report." });
@@ -359,149 +352,8 @@ router.get("/readings/:id/report-html", async (req, res) => {
 });
 
 // ────────────────────────────────────────────────────────────
-// DOWNLOAD DOCX REPORT
-// Converts stored HTML → .docx via html-docx-js and downloads
-// ────────────────────────────────────────────────────────────
-router.get("/readings/:id/report-docx", async (req, res) => {
-  try {
-    if (!htmlDocx) {
-      return res.status(500).json({
-        error: "html-docx-js is not installed. Run: npm install html-docx-js",
-      });
-    }
-
-    const reading = await dbGet(
-      `SELECT id, report_content, status FROM readings WHERE id = $1`,
-      [req.params.id]
-    );
-
-    if (!reading) {
-      return res.status(404).json({ error: "Reading not found." });
-    }
-
-    let reportContent;
-    try {
-      reportContent = JSON.parse(reading.report_content || "{}");
-    } catch (e) {
-      return res.status(400).json({ error: "Invalid report format." });
-    }
-
-    const htmlContent = reportContent.html || reportContent.html_source || null;
-
-    if (!htmlContent) {
-      return res.status(400).json({
-        error: "No HTML report found for this reading.",
-      });
-    }
-
-    // html-docx-js requires a full HTML document string
-    // Wrap in a full HTML doc if it isn't already
-    let fullHtml = htmlContent;
-    if (!htmlContent.trim().toLowerCase().startsWith("<!doctype") &&
-        !htmlContent.trim().toLowerCase().startsWith("<html")) {
-      fullHtml = `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>${htmlContent}</body></html>`;
-    }
-
-    console.log(
-      `[admin.js] >>> Converting HTML→DOCX | readingId=${req.params.id} | htmlSize=${fullHtml.length}`
-    );
-
-    // Convert to DOCX buffer
-    const docxBuffer = htmlDocx.asBlob(fullHtml);
-
-    // html-docx-js returns a Blob in browser, but in Node it returns a Buffer
-    // Handle both cases
-    let buffer;
-    if (Buffer.isBuffer(docxBuffer)) {
-      buffer = docxBuffer;
-    } else if (docxBuffer && typeof docxBuffer.arrayBuffer === "function") {
-      // Blob-like object
-      const arrayBuf = await docxBuffer.arrayBuffer();
-      buffer = Buffer.from(arrayBuf);
-    } else {
-      buffer = Buffer.from(docxBuffer);
-    }
-
-    const baseName = (reportContent.html_filename || `reading-${req.params.id}`)
-      .replace(/\.html?$/i, "");
-    const fileName = `${baseName}.docx`;
-
-    console.log(
-      `[admin.js] >>> Sending DOCX download | readingId=${req.params.id} | fileName="${fileName}" | size=${buffer.length}`
-    );
-
-    res.setHeader(
-      "Content-Type",
-      "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    );
-    res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
-    res.send(buffer);
-  } catch (err) {
-    console.error("[admin.js] DOCX conversion error:", err);
-    res.status(500).json({ error: "Failed to convert report to DOCX: " + err.message });
-  }
-});
-
-// ────────────────────────────────────────────────────────────
-// UPDATE READING STATUS + NOTES (simple — no email required)
-// Allows toggling between 'generated' and 'delivered'
-// ────────────────────────────────────────────────────────────
-router.post("/readings/:id/status", async (req, res) => {
-  try {
-    const { status, admin_notes } = req.body;
-
-    const allowed = ["generated", "delivered", "pending", "failed"];
-    if (!status || !allowed.includes(status)) {
-      return res.status(400).json({
-        error: `Invalid status. Allowed: ${allowed.join(", ")}`,
-      });
-    }
-
-    // Build the update — if marking delivered, also set delivered_at and report_sent_at
-    if (status === "delivered") {
-      await dbRun(
-        `UPDATE readings
-         SET status         = 'delivered',
-             delivered_at   = COALESCE(delivered_at, NOW()),
-             report_sent_at = COALESCE(report_sent_at, NOW()),
-             admin_notes    = COALESCE(NULLIF($1, ''), admin_notes)
-         WHERE id = $2`,
-        [admin_notes || "", req.params.id]
-      );
-
-      // Upgrade customer tier if still free_reading
-      await dbRun(
-        `UPDATE customers
-         SET tier       = 'paid_reading',
-             updated_at = NOW()
-         WHERE id = (SELECT user_id FROM readings WHERE id = $1)
-           AND tier = 'free_reading'`,
-        [req.params.id]
-      );
-    } else {
-      // For reverting back to generated (or any other status)
-      await dbRun(
-        `UPDATE readings
-         SET status      = $1,
-             admin_notes = COALESCE(NULLIF($2, ''), admin_notes)
-         WHERE id = $3`,
-        [status, admin_notes || "", req.params.id]
-      );
-    }
-
-    console.log(
-      `[admin.js] >>> Reading status updated | readingId=${req.params.id} | newStatus=${status}`
-    );
-
-    res.json({ success: true, status });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Failed to update reading status." });
-  }
-});
-
-// ────────────────────────────────────────────────────────────
-// MARK READING AS SENT (legacy — keeps existing behaviour)
+// MARK READING AS SENT
+// Updates status to delivered + saves admin notes
 // ────────────────────────────────────────────────────────────
 router.post("/readings/:id/mark-sent", async (req, res) => {
   try {
@@ -524,6 +376,7 @@ router.post("/readings/:id/mark-sent", async (req, res) => {
       [sent_to, sent_by, admin_notes, req.params.id]
     );
 
+    // Upgrade customer tier if still free_reading
     await dbRun(
       `UPDATE customers
        SET tier       = 'paid_reading',
@@ -545,7 +398,7 @@ router.post("/readings/:id/mark-sent", async (req, res) => {
 });
 
 // ────────────────────────────────────────────────────────────
-// SAVE ADMIN NOTES (without changing status)
+// SAVE ADMIN NOTES (without marking sent)
 // ────────────────────────────────────────────────────────────
 router.post("/readings/:id/notes", async (req, res) => {
   try {

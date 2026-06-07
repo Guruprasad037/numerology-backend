@@ -1,32 +1,34 @@
 // ============================================================
 //  src/routes/webhook.js
-//  v5 — Paid reading profiles are now permanent (never demoted)
+//  v6 — Added DB-level idempotency guard on gateway_payment_id
 //
-//  CHANGES (v4 → v5):
-//    The demotion step (UPDATE numerology_profiles SET
-//    is_primary=FALSE) has been REMOVED for paid readings.
+//  CHANGES (v5 → v6):
+//    Added a try/catch around the "mark order as paid" UPDATE.
 //
-//    Why it was wrong:
-//      Demotion was copied from the free-reading pattern where
-//      one visitor has one "active" profile at a time. For paid
-//      readings, each subject (Abhi, Bharat, Chirag, Deeksha)
-//      is a different person — all profiles must be kept
-//      permanently so admin can see every subject's numbers.
+//    Why:
+//      Razorpay sometimes delivers the same webhook more than
+//      once (retries on timeout, network hiccup, etc.).
+//      Two simultaneous deliveries could both pass the
+//      (order.status === 'paid') check before either writes
+//      to the DB — causing duplicate profiles, duplicate
+//      readings, and duplicate emails.
 //
-//    What we do instead:
-//      All paid reading profiles are inserted with
-//      is_primary = FALSE. The UNIQUE index on
-//      (user_id WHERE is_primary=TRUE) is therefore never
-//      triggered and multiple subjects under one customer
-//      coexist safely without any demotion needed.
+//    The fix (two parts, both needed):
+//      PART A — SQL migration (run once in your DB, not here):
+//        ALTER TABLE orders
+//          ADD CONSTRAINT orders_gateway_payment_id_key
+//          UNIQUE (gateway_payment_id);
 //
-//    Free reading path (reading-db.js) is completely unchanged
-//    — demotion still happens there and is correct for that
-//    anonymous single-profile-per-visitor pattern.
+//      PART B — This file: wrap the UPDATE in a try/catch.
+//        If a second webhook tries to write the same
+//        gateway_payment_id, Postgres throws error code 23505
+//        (unique_violation). We catch that, log it, and return
+//        early. Any other error is re-thrown as normal.
 //
-//  ALSO FIXED IN v4 (still present):
-//    Profile lookup matches (user_id + name_used + dob_used)
-//    so the same subject repurchasing is handled correctly.
+//    The happy path (single delivery) is completely unchanged.
+//    The catch block only fires during a race condition.
+//
+//  ALL OTHER LOGIC IS IDENTICAL TO v5.
 // ============================================================
 
 const express = require("express");
@@ -108,24 +110,56 @@ router.post("/", async (req, res) => {
     }
 
     // ── 2. Mark order as paid ───────────────────────────────────
+    //
+    // FIX v6: Wrapped in try/catch to handle duplicate webhook delivery.
+    //
+    // How it works:
+    //   - The orders table now has a UNIQUE constraint on gateway_payment_id
+    //     (added via: ALTER TABLE orders ADD CONSTRAINT
+    //      orders_gateway_payment_id_key UNIQUE (gateway_payment_id))
+    //
+    //   - If two webhooks arrive simultaneously, both pass the
+    //     (order.status === 'paid') check above before either writes.
+    //     But only ONE can write gateway_payment_id successfully.
+    //     The second write triggers Postgres error code 23505
+    //     (unique_violation) which we catch here and exit early.
+    //
+    //   - Any other error (network, syntax, etc.) is re-thrown
+    //     so it still gets caught by the outer try/catch below.
+    // ────────────────────────────────────────────────────────────
     log(6, "Marking order as paid");
-    await dbRun(
-      `UPDATE orders
-       SET status             = 'paid',
-           gateway_payment_id = $1,
-           gateway_metadata   = $2,
-           paid_at            = NOW()
-       WHERE id = $3`,
-      [
-        rpPayId,
-        JSON.stringify({
-          signature: receivedSig,
-          webhook_event: event.event,
-          payment_method: payment.method,
-        }),
-        order.id,
-      ]
-    );
+    try {
+      await dbRun(
+        `UPDATE orders
+         SET status             = 'paid',
+             gateway_payment_id = $1,
+             gateway_metadata   = $2,
+             paid_at            = NOW()
+         WHERE id = $3`,
+        [
+          rpPayId,
+          JSON.stringify({
+            signature:      receivedSig,
+            webhook_event:  event.event,
+            payment_method: payment.method,
+          }),
+          order.id,
+        ]
+      );
+    } catch (err) {
+      if (err.code === "23505") {
+        // 23505 = unique_violation in Postgres.
+        // This means a duplicate webhook already processed this payment.
+        // Safe to ignore — just log and exit.
+        console.log(
+          `[${FILE}] >>> Duplicate gateway_payment_id "${rpPayId}" — already processed by a concurrent webhook, skipping safely`
+        );
+        return;
+      }
+      // Any other DB error is unexpected — re-throw it so the
+      // outer catch block logs it as a FATAL ERROR.
+      throw err;
+    }
 
     // ── 3. Upgrade customer tier ────────────────────────────────
     log(7, "Upgrading customer tier");

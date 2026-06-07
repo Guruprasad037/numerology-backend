@@ -1,19 +1,24 @@
 // ============================================================
-//  src/routes/admin.js  v11
+//  src/routes/admin.js  v12
 //
-//  CHANGES (v10 → v11):
-//    - Added GET  /admin/engine-config  → returns current engine settings
-//    - Added POST /admin/engine-config  → saves engine settings to
-//      runtime-config.json (project root, gitignored)
+//  CHANGES (v11 → v12):
+//    Engine config now stored in the database (settings table)
+//    instead of runtime-config.json.
 //
-//    These two endpoints power the "Engine Config" tab in the
-//    admin panel. No git push needed to switch engines anymore —
-//    just click a button in the admin UI.
+//  WHY:
+//    Render's filesystem is ephemeral — runtime-config.json was
+//    wiped on every deploy/restart, silently reverting the engine
+//    setting back to the env var default.
 //
-//    runtime-config.json is read by reading.settings.js on
-//    every resolveSettings() call, so changes are instant.
+//  WHAT CHANGED:
+//    - Removed: fs, path imports (no longer needed)
+//    - Removed: ENGINE_CONFIG_FILE constant
+//    - Removed: readEngineConfig() helper function
+//    - GET  /admin/engine-config  now reads from settings table
+//    - POST /admin/engine-config  now writes to settings table
+//      using INSERT ... ON CONFLICT DO UPDATE (upsert)
 //
-//  All other endpoints unchanged from v10.
+//  All other endpoints are IDENTICAL to v11.
 // ============================================================
 
 const express = require("express");
@@ -21,14 +26,8 @@ const router  = express.Router();
 const { dbAll, dbGet, dbRun } = require("../config/db");
 const { requireAdmin }        = require("../middleware/auth");
 
-// ── Required for engine config file read/write ────────────────
-const fs   = require("fs");
-const path = require("path");
-
-// runtime-config.json lives in the project root
-// __dirname here = numerology-backend/src/routes/
-// so we go up two levels to reach numerology-backend/
-const ENGINE_CONFIG_FILE = path.join(__dirname, "../../runtime-config.json");
+// NOTE: fs and path are no longer imported here.
+// Engine config is stored in the DB, not on disk.
 
 let htmlDocx;
 try { htmlDocx = require("html-docx-js"); }
@@ -49,21 +48,9 @@ function parseReportContent(raw) {
   try { return JSON.parse(raw); } catch { return null; }
 }
 
-// ────────────────────────────────────────────────────────────
-// Helper: read runtime-config.json
-// Returns defaults if file doesn't exist yet
-// ────────────────────────────────────────────────────────────
-function readEngineConfig() {
-  try {
-    return JSON.parse(fs.readFileSync(ENGINE_CONFIG_FILE, "utf8"));
-  } catch {
-    // File doesn't exist yet — return env vars or hardcoded defaults
-    return {
-      FREE_READING_ENGINE: process.env.FREE_READING_ENGINE || "hardcoded",
-      PAID_READING_ENGINE: process.env.PAID_READING_ENGINE || "hardcoded",
-    };
-  }
-}
+// NOTE: readEngineConfig() has been removed.
+// Engine config is now read directly from the DB in the
+// GET /admin/engine-config endpoint below.
 
 // ────────────────────────────────────────────────────────────
 // DASHBOARD
@@ -193,9 +180,6 @@ router.get("/users", async (req, res) => { req.url = "/customers"; router.handle
 
 // ────────────────────────────────────────────────────────────
 // NUMEROLOGY PROFILES
-//
-// FIX v10: Removed WHERE is_primary = TRUE so all subject
-// profiles are shown — not just the latest one per customer.
 // ────────────────────────────────────────────────────────────
 router.get("/profiles", async (req, res) => {
   try {
@@ -263,7 +247,7 @@ router.get("/orders", async (req, res) => {
 });
 
 // ────────────────────────────────────────────────────────────
-// READINGS — all 19 columns
+// READINGS
 // ────────────────────────────────────────────────────────────
 router.get("/readings", async (req, res) => {
   try {
@@ -289,8 +273,6 @@ router.get("/readings", async (req, res) => {
 
 // ────────────────────────────────────────────────────────────
 // EXPORT — 4-sheet .xlsx
-// Sheet 1: Readings  Sheet 2: Orders
-// Sheet 3: Profiles  Sheet 4: Customers
 // ────────────────────────────────────────────────────────────
 router.get("/export", async (req, res) => {
   if (!XLSX) return res.status(500).json({ error: "xlsx package not installed. Run: npm install xlsx" });
@@ -325,7 +307,6 @@ router.get("/export", async (req, res) => {
          FROM orders o JOIN customers c ON c.id = o.user_id
          ORDER BY o.created_at ASC`
       ),
-      // FIX v10: removed WHERE is_primary = TRUE — show all subject profiles
       dbAll(
         `SELECT np.id, np.user_id, c.full_name, np.name_used, np.dob_used, np.is_primary,
                 np.psychic_number, np.psychic_compound, np.destiny_number, np.destiny_compound,
@@ -497,101 +478,101 @@ router.get("/export", async (req, res) => {
     wb.Sheets["Orders"] = makeSheet("Orders", orders, orderCols);
 
     const profileCols = [
-      { key:"id",                   label:"Profile ID",           width:38 },
-      { key:"user_id",              label:"User ID",              width:38 },
-      { key:"full_name",            label:"Customer Name",        width:22 },
-      { key:"name_used",            label:"Subject Name",         width:22 },
-      { key:"dob_used",             label:"Subject DOB",          width:14 },
-      { key:"is_primary",           label:"Is Primary",           width:10 },
-      { key:"psychic_number",       label:"Psychic",              width:10 },
-      { key:"psychic_compound",     label:"Psychic Compound",     width:16 },
-      { key:"destiny_number",       label:"Destiny",              width:10 },
-      { key:"destiny_compound",     label:"Destiny Compound",     width:16 },
-      { key:"name_number",          label:"Name Number",          width:14 },
-      { key:"name_compound",        label:"Name Compound",        width:14 },
-      { key:"soul_urge_number",     label:"Soul Urge",            width:12 },
-      { key:"soul_urge_compound",   label:"Soul Urge Compound",   width:18 },
-      { key:"personality_number",   label:"Personality",          width:14 },
-      { key:"personality_compound", label:"Personality Compound", width:20 },
-      { key:"maturity_number",      label:"Maturity",             width:12 },
-      { key:"maturity_compound",    label:"Maturity Compound",    width:18 },
-      { key:"power_number",         label:"Power",                width:10 },
-      { key:"power_compound",       label:"Power Compound",       width:16 },
-      { key:"life_path_number",     label:"Life Path",            width:12 },
-      { key:"life_path_compound",   label:"Life Path Compound",   width:18 },
-      { key:"ruling_planet",        label:"Ruling Planet",        width:14 },
-      { key:"pd_combination",       label:"PD Combination",       width:14 },
-      { key:"birth_day_number",     label:"Birth Day",            width:12 },
-      { key:"birth_month_number",   label:"Birth Month",          width:14 },
-      { key:"birth_year_number",    label:"Birth Year",           width:12 },
-      { key:"personal_year_number", label:"Personal Year",        width:14 },
-      { key:"personal_month_number",label:"Personal Month",       width:16 },
-      { key:"personal_day_number",  label:"Personal Day",         width:14 },
-      { key:"universal_year_number",label:"Universal Year",       width:16 },
-      { key:"universal_month_number",label:"Universal Month",     width:16 },
-      { key:"pinnacle_1",           label:"Pinnacle 1",           width:12 },
-      { key:"pinnacle_1_start_age", label:"P1 Start Age",         width:14 },
-      { key:"pinnacle_1_end_age",   label:"P1 End Age",           width:12 },
-      { key:"pinnacle_2",           label:"Pinnacle 2",           width:12 },
-      { key:"pinnacle_2_start_age", label:"P2 Start Age",         width:14 },
-      { key:"pinnacle_2_end_age",   label:"P2 End Age",           width:12 },
-      { key:"pinnacle_3",           label:"Pinnacle 3",           width:12 },
-      { key:"pinnacle_3_start_age", label:"P3 Start Age",         width:14 },
-      { key:"pinnacle_3_end_age",   label:"P3 End Age",           width:12 },
-      { key:"pinnacle_4",           label:"Pinnacle 4",           width:12 },
-      { key:"pinnacle_4_start_age", label:"P4 Start Age",         width:14 },
-      { key:"current_pinnacle",     label:"Current Pinnacle",     width:16 },
-      { key:"challenge_1",          label:"Challenge 1",          width:12 },
-      { key:"challenge_2",          label:"Challenge 2",          width:12 },
-      { key:"challenge_3",          label:"Challenge 3",          width:12 },
-      { key:"challenge_4",          label:"Challenge 4",          width:12 },
-      { key:"current_challenge",    label:"Current Challenge",    width:16 },
-      { key:"life_period_1",        label:"Life Period 1",        width:14 },
-      { key:"life_period_1_end_age",label:"LP1 End Age",          width:14 },
-      { key:"life_period_2",        label:"Life Period 2",        width:14 },
-      { key:"life_period_2_end_age",label:"LP2 End Age",          width:14 },
-      { key:"life_period_3",        label:"Life Period 3",        width:14 },
-      { key:"current_life_period",  label:"Current Life Period",  width:18 },
-      { key:"cornerstone",          label:"Cornerstone",          width:12 },
-      { key:"cornerstone_value",    label:"Cornerstone Value",    width:16 },
-      { key:"capstone",             label:"Capstone",             width:12 },
-      { key:"capstone_value",       label:"Capstone Value",       width:14 },
-      { key:"first_vowel",          label:"First Vowel",          width:12 },
-      { key:"first_vowel_value",    label:"First Vowel Value",    width:16 },
-      { key:"subconscious_self",    label:"Subconscious Self",    width:16 },
-      { key:"hidden_passions",      label:"Hidden Passions",      width:20 },
-      { key:"karmic_lessons",       label:"Karmic Lessons",       width:16 },
-      { key:"missing_numbers",      label:"Missing Numbers",      width:16 },
-      { key:"has_karmic_debt",      label:"Has Karmic Debt",      width:14 },
-      { key:"karmic_debt_numbers",  label:"Karmic Debt Numbers",  width:20 },
-      { key:"karmic_debt_locations",label:"Karmic Debt Locations",width:22 },
-      { key:"has_master_11",        label:"Master 11",            width:12 },
-      { key:"has_master_22",        label:"Master 22",            width:12 },
-      { key:"has_master_33",        label:"Master 33",            width:12 },
-      { key:"master_numbers_found", label:"Master Numbers",       width:16 },
-      { key:"plane_mental_count",   label:"Mental Count",         width:14 },
-      { key:"plane_mental_number",  label:"Mental Number",        width:14 },
-      { key:"plane_physical_count", label:"Physical Count",       width:16 },
-      { key:"plane_physical_number",label:"Physical Number",      width:16 },
-      { key:"plane_emotional_count",label:"Emotional Count",      width:16 },
-      { key:"plane_emotional_number",label:"Emotional Number",    width:16 },
-      { key:"plane_intuitive_count",label:"Intuitive Count",      width:16 },
-      { key:"plane_intuitive_number",label:"Intuitive Number",    width:16 },
-      { key:"dominant_plane",       label:"Dominant Plane",       width:16 },
+      { key:"id",                    label:"Profile ID",            width:38 },
+      { key:"user_id",               label:"User ID",               width:38 },
+      { key:"full_name",             label:"Customer Name",         width:22 },
+      { key:"name_used",             label:"Subject Name",          width:22 },
+      { key:"dob_used",              label:"Subject DOB",           width:14 },
+      { key:"is_primary",            label:"Is Primary",            width:10 },
+      { key:"psychic_number",        label:"Psychic",               width:10 },
+      { key:"psychic_compound",      label:"Psychic Compound",      width:16 },
+      { key:"destiny_number",        label:"Destiny",               width:10 },
+      { key:"destiny_compound",      label:"Destiny Compound",      width:16 },
+      { key:"name_number",           label:"Name Number",           width:14 },
+      { key:"name_compound",         label:"Name Compound",         width:14 },
+      { key:"soul_urge_number",      label:"Soul Urge",             width:12 },
+      { key:"soul_urge_compound",    label:"Soul Urge Compound",    width:18 },
+      { key:"personality_number",    label:"Personality",           width:14 },
+      { key:"personality_compound",  label:"Personality Compound",  width:20 },
+      { key:"maturity_number",       label:"Maturity",              width:12 },
+      { key:"maturity_compound",     label:"Maturity Compound",     width:18 },
+      { key:"power_number",          label:"Power",                 width:10 },
+      { key:"power_compound",        label:"Power Compound",        width:16 },
+      { key:"life_path_number",      label:"Life Path",             width:12 },
+      { key:"life_path_compound",    label:"Life Path Compound",    width:18 },
+      { key:"ruling_planet",         label:"Ruling Planet",         width:14 },
+      { key:"pd_combination",        label:"PD Combination",        width:14 },
+      { key:"birth_day_number",      label:"Birth Day",             width:12 },
+      { key:"birth_month_number",    label:"Birth Month",           width:14 },
+      { key:"birth_year_number",     label:"Birth Year",            width:12 },
+      { key:"personal_year_number",  label:"Personal Year",         width:14 },
+      { key:"personal_month_number", label:"Personal Month",        width:16 },
+      { key:"personal_day_number",   label:"Personal Day",          width:14 },
+      { key:"universal_year_number", label:"Universal Year",        width:16 },
+      { key:"universal_month_number",label:"Universal Month",       width:16 },
+      { key:"pinnacle_1",            label:"Pinnacle 1",            width:12 },
+      { key:"pinnacle_1_start_age",  label:"P1 Start Age",          width:14 },
+      { key:"pinnacle_1_end_age",    label:"P1 End Age",            width:12 },
+      { key:"pinnacle_2",            label:"Pinnacle 2",            width:12 },
+      { key:"pinnacle_2_start_age",  label:"P2 Start Age",          width:14 },
+      { key:"pinnacle_2_end_age",    label:"P2 End Age",            width:12 },
+      { key:"pinnacle_3",            label:"Pinnacle 3",            width:12 },
+      { key:"pinnacle_3_start_age",  label:"P3 Start Age",          width:14 },
+      { key:"pinnacle_3_end_age",    label:"P3 End Age",            width:12 },
+      { key:"pinnacle_4",            label:"Pinnacle 4",            width:12 },
+      { key:"pinnacle_4_start_age",  label:"P4 Start Age",          width:14 },
+      { key:"current_pinnacle",      label:"Current Pinnacle",      width:16 },
+      { key:"challenge_1",           label:"Challenge 1",           width:12 },
+      { key:"challenge_2",           label:"Challenge 2",           width:12 },
+      { key:"challenge_3",           label:"Challenge 3",           width:12 },
+      { key:"challenge_4",           label:"Challenge 4",           width:12 },
+      { key:"current_challenge",     label:"Current Challenge",     width:16 },
+      { key:"life_period_1",         label:"Life Period 1",         width:14 },
+      { key:"life_period_1_end_age", label:"LP1 End Age",           width:14 },
+      { key:"life_period_2",         label:"Life Period 2",         width:14 },
+      { key:"life_period_2_end_age", label:"LP2 End Age",           width:14 },
+      { key:"life_period_3",         label:"Life Period 3",         width:14 },
+      { key:"current_life_period",   label:"Current Life Period",   width:18 },
+      { key:"cornerstone",           label:"Cornerstone",           width:12 },
+      { key:"cornerstone_value",     label:"Cornerstone Value",     width:16 },
+      { key:"capstone",              label:"Capstone",              width:12 },
+      { key:"capstone_value",        label:"Capstone Value",        width:14 },
+      { key:"first_vowel",           label:"First Vowel",           width:12 },
+      { key:"first_vowel_value",     label:"First Vowel Value",     width:16 },
+      { key:"subconscious_self",     label:"Subconscious Self",     width:16 },
+      { key:"hidden_passions",       label:"Hidden Passions",       width:20 },
+      { key:"karmic_lessons",        label:"Karmic Lessons",        width:16 },
+      { key:"missing_numbers",       label:"Missing Numbers",       width:16 },
+      { key:"has_karmic_debt",       label:"Has Karmic Debt",       width:14 },
+      { key:"karmic_debt_numbers",   label:"Karmic Debt Numbers",   width:20 },
+      { key:"karmic_debt_locations", label:"Karmic Debt Locations", width:22 },
+      { key:"has_master_11",         label:"Master 11",             width:12 },
+      { key:"has_master_22",         label:"Master 22",             width:12 },
+      { key:"has_master_33",         label:"Master 33",             width:12 },
+      { key:"master_numbers_found",  label:"Master Numbers",        width:16 },
+      { key:"plane_mental_count",    label:"Mental Count",          width:14 },
+      { key:"plane_mental_number",   label:"Mental Number",         width:14 },
+      { key:"plane_physical_count",  label:"Physical Count",        width:16 },
+      { key:"plane_physical_number", label:"Physical Number",       width:16 },
+      { key:"plane_emotional_count", label:"Emotional Count",       width:16 },
+      { key:"plane_emotional_number",label:"Emotional Number",      width:16 },
+      { key:"plane_intuitive_count", label:"Intuitive Count",       width:16 },
+      { key:"plane_intuitive_number",label:"Intuitive Number",      width:16 },
+      { key:"dominant_plane",        label:"Dominant Plane",        width:16 },
       { key:"soul_expression_bridge",label:"Soul-Expression Bridge",width:22 },
       { key:"life_personality_bridge",label:"Life-Personality Bridge",width:22 },
-      { key:"rational_thought_number",label:"Rational Thought",  width:16 },
-      { key:"balance_number",       label:"Balance Number",       width:14 },
-      { key:"physical_transit",     label:"Physical Transit",     width:16 },
-      { key:"physical_transit_value",label:"Physical Transit Val",width:18 },
-      { key:"mental_transit",       label:"Mental Transit",       width:16 },
-      { key:"mental_transit_value", label:"Mental Transit Val",   width:18 },
-      { key:"spiritual_transit",    label:"Spiritual Transit",    width:18 },
+      { key:"rational_thought_number",label:"Rational Thought",     width:16 },
+      { key:"balance_number",        label:"Balance Number",        width:14 },
+      { key:"physical_transit",      label:"Physical Transit",      width:16 },
+      { key:"physical_transit_value",label:"Physical Transit Val",  width:18 },
+      { key:"mental_transit",        label:"Mental Transit",        width:16 },
+      { key:"mental_transit_value",  label:"Mental Transit Val",    width:18 },
+      { key:"spiritual_transit",     label:"Spiritual Transit",     width:18 },
       { key:"spiritual_transit_value",label:"Spiritual Transit Val",width:20 },
-      { key:"essence_number",       label:"Essence Number",       width:14 },
-      { key:"schema_version",       label:"Schema Version",       width:14 },
-      { key:"calculated_at",        label:"Calculated At",        width:20 },
-      { key:"created_at",           label:"Created At",           width:20 },
+      { key:"essence_number",        label:"Essence Number",        width:14 },
+      { key:"schema_version",        label:"Schema Version",        width:14 },
+      { key:"calculated_at",         label:"Calculated At",         width:20 },
+      { key:"created_at",            label:"Created At",            width:20 },
     ];
     wb.SheetNames.push("Numerology Profiles");
     wb.Sheets["Numerology Profiles"] = makeSheet("Numerology Profiles", profiles, profileCols);
@@ -734,21 +715,42 @@ router.post("/readings/:id/notes", async (req, res) => {
 });
 
 // ────────────────────────────────────────────────────────────
-// ENGINE CONFIG  (v11 — new endpoints)
+// ENGINE CONFIG  (v12 — DB-backed, survives Render restarts)
 //
-// GET  /admin/engine-config  → returns current engine settings
-// POST /admin/engine-config  → saves engine settings to
-//                              runtime-config.json (gitignored)
+// CHANGE from v11:
+//   Was:  read/write runtime-config.json on disk (wiped on restart)
+//   Now:  read/write settings table in DB (persists forever)
 //
-// reading.settings.js re-reads runtime-config.json on every
-// resolveSettings() call so changes take effect immediately
-// without restarting the server.
+// GET  /admin/engine-config
+//   Reads FREE_READING_ENGINE and PAID_READING_ENGINE rows from
+//   the settings table. Falls back to env vars if rows missing.
+//
+// POST /admin/engine-config
+//   Upserts both rows using INSERT ... ON CONFLICT DO UPDATE.
+//   This is atomic — either both rows update or neither does.
+//   No file I/O anywhere.
 // ────────────────────────────────────────────────────────────
-router.get("/engine-config", (req, res) => {
-  res.json(readEngineConfig());
+router.get("/engine-config", async (req, res) => {
+  try {
+    const rows = await dbAll(
+      `SELECT key, value FROM settings WHERE key IN ('FREE_READING_ENGINE','PAID_READING_ENGINE')`
+    );
+
+    // Build result object from DB rows, falling back to env vars
+    const result = {
+      FREE_READING_ENGINE: process.env.FREE_READING_ENGINE || 'hardcoded',
+      PAID_READING_ENGINE: process.env.PAID_READING_ENGINE || 'hardcoded',
+    };
+    rows.forEach(r => { result[r.key] = r.value; });
+
+    res.json(result);
+  } catch (err) {
+    console.error("[admin.js] engine-config GET error:", err);
+    res.status(500).json({ error: "Failed to read engine config: " + err.message });
+  }
 });
 
-router.post("/engine-config", (req, res) => {
+router.post("/engine-config", async (req, res) => {
   const { FREE_READING_ENGINE, PAID_READING_ENGINE } = req.body;
 
   // Only allow these two exact values — no typos possible
@@ -757,10 +759,27 @@ router.post("/engine-config", (req, res) => {
     return res.status(400).json({ error: "Invalid engine value. Must be 'claude' or 'hardcoded'." });
   }
 
-  const cfg = { FREE_READING_ENGINE, PAID_READING_ENGINE };
-  fs.writeFileSync(ENGINE_CONFIG_FILE, JSON.stringify(cfg, null, 2));
-  console.log(`[admin.js] engines updated → free="${FREE_READING_ENGINE}" paid="${PAID_READING_ENGINE}"`);
-  res.json({ ok: true, ...cfg });
+  try {
+    // Upsert both rows in one query using a VALUES list.
+    // ON CONFLICT DO UPDATE means this works whether the rows
+    // already exist or not — safe to call repeatedly.
+    await dbRun(
+      `INSERT INTO settings (key, value, updated_at)
+       VALUES
+         ('FREE_READING_ENGINE', $1, NOW()),
+         ('PAID_READING_ENGINE', $2, NOW())
+       ON CONFLICT (key) DO UPDATE
+         SET value      = EXCLUDED.value,
+             updated_at = EXCLUDED.updated_at`,
+      [FREE_READING_ENGINE, PAID_READING_ENGINE]
+    );
+
+    console.log(`[admin.js] engine config saved to DB → free="${FREE_READING_ENGINE}" paid="${PAID_READING_ENGINE}"`);
+    res.json({ ok: true, FREE_READING_ENGINE, PAID_READING_ENGINE });
+  } catch (err) {
+    console.error("[admin.js] engine-config POST error:", err);
+    res.status(500).json({ error: "Failed to save engine config: " + err.message });
+  }
 });
 
 module.exports = router;

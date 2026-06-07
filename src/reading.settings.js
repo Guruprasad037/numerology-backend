@@ -1,50 +1,58 @@
 // ============================================================
-//  reading.settings.js  v5
+//  reading.settings.js  v6
 //
-//  ENGINE SWITCHING — no git push needed anymore!
+//  CHANGE (v5 → v6):
+//    Engine config now stored in the database (settings table)
+//    instead of runtime-config.json.
 //
-//  Priority order (highest → lowest):
-//    1. runtime-config.json  ← set via /admin "Engine Config" tab
-//    2. Environment variables (FREE_READING_ENGINE, PAID_READING_ENGINE)
-//    3. Hardcoded defaults below ('hardcoded')
+//  WHY:
+//    Render's filesystem is ephemeral — any file written to disk
+//    is wiped on every deploy or restart. This meant the engine
+//    setting set via the admin UI would silently revert to the
+//    env var default every time the server restarted.
 //
-//  To switch engines: log into your admin panel → Engine Config tab
-//  Changes take effect IMMEDIATELY — no restart, no git push.
+//    The settings table persists forever, just like orders and
+//    readings. Engine changes now survive restarts and deploys.
+//
+//  HOW resolveSettings() works now:
+//    1. Queries settings table for FREE_READING_ENGINE /
+//       PAID_READING_ENGINE (whichever is relevant)
+//    2. Falls back to environment variable if row is missing
+//    3. Falls back to 'hardcoded' if env var also missing
+//
+//  IMPORTANT — resolveSettings() is now ASYNC.
+//    Callers must await it:
+//      const { engine, promptVersion } = await settings.resolveSettings(serviceType);
+//    This only affects dispatcher.js (already updated).
+//
+//  The module-level FREE_READING_ENGINE / PAID_READING_ENGINE
+//  constants are kept for backwards compatibility but they now
+//  only reflect the env var / hardcoded default at startup time.
+//  Always use resolveSettings() for the live value.
+//
+//  runtime-config.json is no longer read or written anywhere.
+//  fs and path imports have been removed.
 // ============================================================
 
 const FILE = 'reading.settings.js';
 
-// ── Required to read runtime-config.json ─────────────────────
-const fs   = require('fs');
-const path = require('path');
+// ── DB helper — same pool used everywhere else ────────────────
+// We import db lazily inside resolveSettings() to avoid any
+// circular-require issues during module initialisation.
+// ─────────────────────────────────────────────────────────────
 
-// runtime-config.json sits in the project root (same folder as this file)
-const _ENGINE_CONFIG_FILE = path.join(__dirname, 'runtime-config.json');
-
-// Read the config file — returns {} if file doesn't exist yet
-function _loadEngineConfig() {
-  try {
-    return JSON.parse(fs.readFileSync(_ENGINE_CONFIG_FILE, 'utf8'));
-  } catch {
-    return {};
-  }
-}
-
-// ── Load config once at startup (for module-level constants) ──
-const _cfg = _loadEngineConfig();
-
-// ── Engine constants (used as fallback, real value comes from resolveSettings) ──
+// ── Module-level constants (startup defaults only) ────────────
+// These reflect env vars / hardcoded defaults at boot time.
+// They are NOT updated when admin changes the engine via the UI.
+// Use resolveSettings() for the live, DB-backed value.
 const FREE_READING_ENGINE =
-  _cfg.FREE_READING_ENGINE ||          // 1. runtime-config.json
-  process.env.FREE_READING_ENGINE ||   // 2. environment variable
-  'hardcoded';                         // 3. default
+  process.env.FREE_READING_ENGINE || 'hardcoded';
 
 const PAID_READING_ENGINE =
-  _cfg.PAID_READING_ENGINE ||          // 1. runtime-config.json
-  process.env.PAID_READING_ENGINE ||   // 2. environment variable
-  'hardcoded';                         // 3. default
+  process.env.PAID_READING_ENGINE || 'hardcoded';
 
-console.log(`[${FILE}] FREE_READING_ENGINE="${FREE_READING_ENGINE}" PAID_READING_ENGINE="${PAID_READING_ENGINE}"`);
+console.log(`[${FILE}] startup defaults — FREE_READING_ENGINE="${FREE_READING_ENGINE}" PAID_READING_ENGINE="${PAID_READING_ENGINE}"`);
+console.log(`[${FILE}] live values will be read from DB on every resolveSettings() call`);
 
 // ── Prompt versions — only used when engine = 'claude' ───────
 const PROMPT_VERSIONS = {
@@ -70,27 +78,51 @@ const REPORT_COLORS = {
 };
 
 // ────────────────────────────────────────────────────────────
-// RESOLVER
-// Called by dispatcher — returns engine + prompt version.
+// RESOLVER  (now async)
 //
-// IMPORTANT: re-reads runtime-config.json on EVERY call so
-// that admin panel changes take effect immediately without
-// restarting the server.
+// Called by dispatcher on every reading request.
+// Reads the live engine value from the settings table so that
+// admin UI changes take effect immediately — no restart needed.
+//
+// Priority order:
+//   1. settings table in DB   ← set via /admin Engine Config tab
+//   2. Environment variable   ← FREE_READING_ENGINE / PAID_READING_ENGINE
+//   3. 'hardcoded'            ← safe default, zero API cost
 // ────────────────────────────────────────────────────────────
-function resolveSettings(serviceType) {
-  // Re-read the file every time so live changes are picked up instantly
-  const live = _loadEngineConfig();
-
-  const isFree = serviceType === 'free_reading';
-
-  // Use live config first, fall back to startup value
-  const engine = isFree
-    ? (live.FREE_READING_ENGINE || FREE_READING_ENGINE)
-    : (live.PAID_READING_ENGINE || PAID_READING_ENGINE);
-
+async function resolveSettings(serviceType) {
+  const isFree  = serviceType === 'free_reading';
+  const dbKey   = isFree ? 'FREE_READING_ENGINE' : 'PAID_READING_ENGINE';
+  const envFallback = isFree ? FREE_READING_ENGINE : PAID_READING_ENGINE;
   const promptVersion = isFree
     ? PROMPT_VERSIONS.free_reading
     : PROMPT_VERSIONS.paid_reading;
+
+  let engine = envFallback; // will be overridden by DB value if found
+
+  try {
+    // Lazy-require db to avoid circular dependency during module init.
+    // On first call this loads the module; on subsequent calls Node
+    // returns the cached module — no performance cost.
+    const { dbGet } = require('./src/config/db');
+
+    const row = await dbGet(
+      `SELECT value FROM settings WHERE key = $1`,
+      [dbKey]
+    );
+
+    if (row && row.value) {
+      engine = row.value;
+      console.log(`[${FILE}] resolveSettings("${serviceType}") → engine="${engine}" (from DB)`);
+    } else {
+      // Row missing — this shouldn't happen after migration, but
+      // falling back gracefully is better than crashing.
+      console.warn(`[${FILE}] resolveSettings: key "${dbKey}" not found in settings table — using fallback "${engine}"`);
+    }
+  } catch (err) {
+    // DB unavailable — use env var / hardcoded default.
+    // This keeps the site running even if DB is temporarily down.
+    console.error(`[${FILE}] resolveSettings: DB read failed — using fallback "${engine}". Error: ${err.message}`);
+  }
 
   console.log(`[${FILE}] resolveSettings("${serviceType}") → engine="${engine}" promptVersion="${promptVersion}"`);
   return { engine, promptVersion };

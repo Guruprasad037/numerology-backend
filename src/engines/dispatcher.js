@@ -1,16 +1,17 @@
 // ============================================================
-//  src/engines/dispatcher.js  v3
+//  src/engines/dispatcher.js  v4
 //
-//  CHANGES from v2:
-//    - Reads FREE_READING_ENGINE / PAID_READING_ENGINE from settings
-//      instead of defaultEngine / engineOverrides
-//    - Calls hardcoded.runFreeReading() or hardcoded.runPaidReading()
-//      depending on service type — no more generic run(service, profile)
-//    - tagResult() unchanged — still attaches _engine_config/_engine_used
+//  CHANGE (v3 → v4):
+//    settings.resolveSettings() is now async (it reads from the
+//    database instead of a file). Added `await` to the call.
+//
+//    That is the ONLY change — one word added.
+//    All engine logic, fallback behaviour, and tagResult()
+//    are identical to v3.
 // ============================================================
 
 const path     = require('path');
-const settings = require('../reading.settings');
+const settings = require('../../reading.settings');
 
 const FILE = 'dispatcher';
 
@@ -53,7 +54,7 @@ function tagResult(result, engineConfig, engineUsed) {
   // wrap it so tags can still be attached and callers get a consistent object.
   if (typeof result === 'string') {
     return {
-      _html:         result,       // paid-reading.js reads this
+      _html:          result,       // paid-reading.js reads this
       _engine_config: engineConfig,
       _engine_used:   engineUsed,
     };
@@ -65,7 +66,12 @@ function tagResult(result, engineConfig, engineUsed) {
 async function dispatch(serviceType, profile) {
   log(`dispatch — serviceType: "${serviceType}"`);
 
-  const { engine: engineConfig, promptVersion } = settings.resolveSettings(serviceType);
+  // ── CHANGE v4: resolveSettings() is now async — must await ──
+  // Previously it read runtime-config.json synchronously.
+  // Now it queries the settings table in the DB.
+  // Everything after this line is identical to v3.
+  const { engine: engineConfig, promptVersion } = await settings.resolveSettings(serviceType);
+
   const isFree = serviceType === 'free_reading';
 
   log(`resolved: engine="${engineConfig}" promptVersion="${promptVersion}" isFree=${isFree}`);

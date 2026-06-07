@@ -13,6 +13,14 @@
 //    customer — the person paying and receiving the report (GURU)
 //    subject  — the person whose numbers are being read (SINDHU or GURU)
 //    is_self  — true when customer and subject are the same person
+//
+//  CHANGE (email validation fix):
+//    Was:  !email.includes('@')
+//    Now:  !/.+@.+\..+/.test(email)
+//    Why:  The old check accepted garbage like "a@b" or "hello@"
+//          which have no domain extension. The new regex requires
+//          something before @, something after @, and a dot with
+//          at least one character after it — e.g. gmail.com
 // ============================================================
 const express   = require('express');
 const router    = express.Router();
@@ -79,7 +87,16 @@ router.post('/create', async (req, res) => {
     return res.status(400).json({ error: 'product_id, name, email, and phone are required.' });
   }
 
-  if (!email.includes('@')) {
+  // ── EMAIL VALIDATION (fixed) ────────────────────────────────
+  // Old check: !email.includes('@')
+  //   → accepted garbage like "a@b", "hello@", "@domain.com"
+  //
+  // New check: /.+@.+\..+/.test(email)
+  //   → requires: [something]@[something].[something]
+  //   → rejects:  "a@b", "hello@", "@domain", "nodot@nodot"
+  //   → accepts:  "priya@gmail.com", "user@occultpulse.in"
+  // ────────────────────────────────────────────────────────────
+  if (!/.+@.+\..+/.test(email)) {
     console.log(`[${FILE}] >>> STEP 2 FAIL: invalid email | email="${email}"`);
     return res.status(400).json({ error: 'Please provide a valid email address.' });
   }

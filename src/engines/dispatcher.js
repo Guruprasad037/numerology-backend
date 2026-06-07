@@ -11,7 +11,7 @@
 // ============================================================
 
 const path     = require('path');
-const settings = require('../../reading.settings');
+const settings = require('../reading.settings');
 
 const FILE = 'dispatcher';
 

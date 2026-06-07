@@ -1,33 +1,34 @@
 // ============================================================
-//  src/routes/admin.js  v10
+//  src/routes/admin.js  v11
 //
-//  CHANGES (v9 → v10):
-//    - /admin/profiles query: removed WHERE is_primary = TRUE
-//      filter so ALL subject profiles are visible, not just
-//      the latest one per customer.
+//  CHANGES (v10 → v11):
+//    - Added GET  /admin/engine-config  → returns current engine settings
+//    - Added POST /admin/engine-config  → saves engine settings to
+//      runtime-config.json (project root, gitignored)
 //
-//      Why this matters:
-//        Paid reading profiles are now stored with
-//        is_primary = FALSE (webhook.js v5). The old filter
-//        hid every paid-reading profile except the first one
-//        that happened to be marked TRUE. Removing the filter
-//        shows all subjects (Abhi, Bharat, Chirag, Deeksha)
-//        for every customer.
+//    These two endpoints power the "Engine Config" tab in the
+//    admin panel. No git push needed to switch engines anymore —
+//    just click a button in the admin UI.
 //
-//      Free reading profiles still use is_primary = TRUE for
-//      their "current active" profile — those are also shown
-//      now since we removed the filter entirely.
+//    runtime-config.json is read by reading.settings.js on
+//    every resolveSettings() call, so changes are instant.
 //
-//    - /admin/export Profiles sheet: same fix applied so the
-//      exported sheet also shows all profiles.
-//
-//    All other endpoints unchanged from v9.
+//  All other endpoints unchanged from v10.
 // ============================================================
 
 const express = require("express");
 const router  = express.Router();
 const { dbAll, dbGet, dbRun } = require("../config/db");
 const { requireAdmin }        = require("../middleware/auth");
+
+// ── Required for engine config file read/write ────────────────
+const fs   = require("fs");
+const path = require("path");
+
+// runtime-config.json lives in the project root
+// __dirname here = numerology-backend/src/routes/
+// so we go up two levels to reach numerology-backend/
+const ENGINE_CONFIG_FILE = path.join(__dirname, "../../runtime-config.json");
 
 let htmlDocx;
 try { htmlDocx = require("html-docx-js"); }
@@ -46,6 +47,22 @@ function parseReportContent(raw) {
   if (!raw) return null;
   if (typeof raw === "object") return raw;
   try { return JSON.parse(raw); } catch { return null; }
+}
+
+// ────────────────────────────────────────────────────────────
+// Helper: read runtime-config.json
+// Returns defaults if file doesn't exist yet
+// ────────────────────────────────────────────────────────────
+function readEngineConfig() {
+  try {
+    return JSON.parse(fs.readFileSync(ENGINE_CONFIG_FILE, "utf8"));
+  } catch {
+    // File doesn't exist yet — return env vars or hardcoded defaults
+    return {
+      FREE_READING_ENGINE: process.env.FREE_READING_ENGINE || "hardcoded",
+      PAID_READING_ENGINE: process.env.PAID_READING_ENGINE || "hardcoded",
+    };
+  }
 }
 
 // ────────────────────────────────────────────────────────────
@@ -179,13 +196,6 @@ router.get("/users", async (req, res) => { req.url = "/customers"; router.handle
 //
 // FIX v10: Removed WHERE is_primary = TRUE so all subject
 // profiles are shown — not just the latest one per customer.
-//
-// Paid reading profiles are stored with is_primary = FALSE
-// (webhook.js v5). The old filter was hiding all of them
-// except the very first one that happened to be TRUE.
-//
-// Sorted by customer (user_id) then calculated_at so you see
-// all subjects grouped together per customer.
 // ────────────────────────────────────────────────────────────
 router.get("/profiles", async (req, res) => {
   try {
@@ -721,6 +731,36 @@ router.post("/readings/:id/notes", async (req, res) => {
     await dbRun(`UPDATE readings SET admin_notes=$1 WHERE id=$2`, [admin_notes, req.params.id]);
     res.json({ success: true });
   } catch (err) { console.error(err); res.status(500).json({ error: "Failed to save notes." }); }
+});
+
+// ────────────────────────────────────────────────────────────
+// ENGINE CONFIG  (v11 — new endpoints)
+//
+// GET  /admin/engine-config  → returns current engine settings
+// POST /admin/engine-config  → saves engine settings to
+//                              runtime-config.json (gitignored)
+//
+// reading.settings.js re-reads runtime-config.json on every
+// resolveSettings() call so changes take effect immediately
+// without restarting the server.
+// ────────────────────────────────────────────────────────────
+router.get("/engine-config", (req, res) => {
+  res.json(readEngineConfig());
+});
+
+router.post("/engine-config", (req, res) => {
+  const { FREE_READING_ENGINE, PAID_READING_ENGINE } = req.body;
+
+  // Only allow these two exact values — no typos possible
+  const VALID = ["claude", "hardcoded"];
+  if (!VALID.includes(FREE_READING_ENGINE) || !VALID.includes(PAID_READING_ENGINE)) {
+    return res.status(400).json({ error: "Invalid engine value. Must be 'claude' or 'hardcoded'." });
+  }
+
+  const cfg = { FREE_READING_ENGINE, PAID_READING_ENGINE };
+  fs.writeFileSync(ENGINE_CONFIG_FILE, JSON.stringify(cfg, null, 2));
+  console.log(`[admin.js] engines updated → free="${FREE_READING_ENGINE}" paid="${PAID_READING_ENGINE}"`);
+  res.json({ ok: true, ...cfg });
 });
 
 module.exports = router;

@@ -1,4 +1,19 @@
 // ============================================================
+//  src/engines/hardcoded.js
+//
+//  This file does three things:
+//    1. Lookup tables — all Chaldean numerology content
+//       (planets, traits, interpretations, descriptions)
+//    2. Free reading prompt — builds the 11-card JSON
+//       returned to the frontend (hardcoded engine)
+//    3. Paid reading prompt — builds the full HTML report
+//       saved to DB and downloaded as DOCX (hardcoded engine)
+//
+//  Exports:
+//    runFreeReading(profile)  → card JSON for frontend
+//    runPaidReading(profile)  → HTML string for DB/DOCX
+// ============================================================
+// ============================================================
 //  src/engines/hardcoded.js  v4
 //
 //  CHANGES from v3:

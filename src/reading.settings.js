@@ -57,7 +57,7 @@ console.log(`[${FILE}] live values will be read from DB on every resolveSettings
 // ── Prompt versions — only used when engine = 'claude' ───────
 const PROMPT_VERSIONS = {
   free_reading: 'v1.0',
-  paid_reading: 'minimal_v1.0',
+  paid_reading: 'v2.0',
 };
 
 // ────────────────────────────────────────────────────────────

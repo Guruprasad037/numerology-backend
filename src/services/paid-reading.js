@@ -1,11 +1,18 @@
 // ============================================================
-//  src/services/paid-reading.js  v3
+//  src/services/paid-reading.js  v4
 //
-//  CHANGES from v2:
-//    - Removed DOCX conversion entirely (html-docx-js unreliable)
-//    - Saves full HTML directly in report_content
-//    - Admin downloads .html file via /readings/:id/report-html
-//    - No external dependencies beyond dispatcher + db
+//  CHANGES from v3:
+//    - Added buildPaidHTMLFromClaudeJSON() — converts Claude's
+//      structured JSON response into a beautiful, DOCX-safe HTML
+//      document. This replaces the old thin buildHTMLFromCards()
+//      for paid readings when engine=claude.
+//
+//    - Dispatcher result shape detection updated:
+//        dispatchResult.sections  → buildPaidHTMLFromClaudeJSON()
+//        dispatchResult._html     → hardcoded engine (unchanged)
+//        dispatchResult.cards     → legacy fallback (unchanged)
+//
+//    - All other logic (DB save, fallback, logging) unchanged.
 // ============================================================
 
 const settings   = require('../reading.settings');
@@ -17,7 +24,6 @@ const FILE = 'src/services/paid-reading.js';
 function log(step, message, data = null) {
   console.log(`[${FILE}] STEP ${step} ${message}`, data ? JSON.stringify(data, null, 2) : '');
 }
-
 function error(step, message, data = null) {
   console.error(`[${FILE}] ❌ STEP ${step} ${message}`, data ? JSON.stringify(data, null, 2) : '');
 }
@@ -40,23 +46,30 @@ async function handlePaidReading(order, profile, profileId) {
   // ── Step 1: Generate HTML via dispatcher ─────────────────
   try {
     log(2, `Dispatching "${order.product_slug}" to engine="${engineConfig}"`);
-
     const dispatchResult = await dispatcher.dispatch(order.product_slug, profile);
 
-    // Read metadata tags
     engineConfig = dispatchResult._engine_config || settings.PAID_READING_ENGINE;
     engineUsed   = dispatchResult._engine_used   || 'unknown';
 
-    // ── Extract HTML from result ──────────────────────────
-    // Shape A: hardcoded paid reading → _html field contains ready HTML
-    // Shape B: claude → cards array → build HTML from cards
+    // ── Shape A: hardcoded engine → _html field ───────────
     if (dispatchResult._html) {
       htmlReport = dispatchResult._html;
       log(3, 'HTML from hardcoded engine', { length: htmlReport.length });
 
+    // ── Shape B: Claude v2.0 → sections JSON ─────────────
+    } else if (dispatchResult.sections || dispatchResult.opening_portrait) {
+      // Claude returns the JSON directly (not wrapped in a sections key)
+      const claudeData = dispatchResult.sections || dispatchResult;
+      htmlReport = buildPaidHTMLFromClaudeJSON(claudeData, profile);
+      log(3, 'HTML built from Claude JSON (v2.0)', {
+        hasSections: !!claudeData.opening_portrait,
+        length:      htmlReport.length,
+      });
+
+    // ── Shape C: legacy cards array ───────────────────────
     } else if (dispatchResult.cards && dispatchResult.cards.length > 0) {
       htmlReport = buildHTMLFromCards(dispatchResult, profile);
-      log(3, 'HTML built from Claude cards', {
+      log(3, 'HTML built from legacy Claude cards', {
         cardCount: dispatchResult.cards.length,
         length:    htmlReport.length,
       });
@@ -119,17 +132,7 @@ async function handlePaidReading(order, profile, profileId) {
   );
 
   const readingId = readingResult.rows[0].id;
-
-  log(7, 'Reading saved successfully', {
-    readingId,
-    status:       'generated',
-    engineConfig,
-    engineUsed,
-    htmlFileName,
-    htmlLength:   htmlReport.length,
-  });
-
-  console.log(`[${FILE}] >>> SUCCESS | readingId=${readingId} | engine_config=${engineConfig} | engine_used=${engineUsed} | html_ready_for_download`);
+  log(7, 'Reading saved successfully', { readingId, engineConfig, engineUsed });
 
   return {
     success:      true,
@@ -143,90 +146,1031 @@ async function handlePaidReading(order, profile, profileId) {
 }
 
 // ────────────────────────────────────────────────────────────
-// Build HTML from Claude's card JSON response
-// Used when PAID_READING_ENGINE=claude and Claude returns cards
+// COLOUR PALETTE  (shared across all builders)
 // ────────────────────────────────────────────────────────────
-function buildHTMLFromCards(dispatchResult, profile) {
-  const name = profile.name_used || profile.name || 'Client';
-  const C = {
-    dark: '#2c3e50', blue: '#3498db', gold: '#f39c12',
-    header: '#34495e', alt: '#ecf0f1', insight: '#e8f4f8',
-  };
+const C = {
+  dark:     '#2c3e50',
+  blue:     '#2980b9',
+  gold:     '#b7860b',
+  goldlt:   '#fdf6e3',
+  teal:     '#1a7a6e',
+  tealt:    '#e8f5f3',
+  header:   '#1a252f',
+  alt:      '#f4f6f7',
+  white:    '#ffffff',
+  border:   '#d5d8dc',
+  text:     '#2c3e50',
+  muted:    '#717d7e',
+  rose:     '#922b21',
+  roselt:   '#fdedec',
+  ink:      '#1a1a2e',
+};
 
-  const cardRows = (dispatchResult.cards || []).map(card => `
-    <div style="margin-bottom:24px;">
-      <div style="background:${C.blue};color:#fff;padding:10px 16px;font-weight:bold;font-size:15px;border-left:5px solid ${C.dark};">
-        ${card.title || `Card ${card.card_number}`}
-        ${card.subtitle ? `<span style="font-weight:normal;font-size:12px;opacity:0.85;margin-left:10px;">${card.subtitle}</span>` : ''}
-      </div>
-      <div style="padding:14px 16px;line-height:1.7;font-size:13px;background:#fff;border:1px solid #ddd;border-top:none;">
-        ${(card.body || '').replace(/\n\n/g, '</p><p style="margin:0 0 10px 0;">').replace(/\n/g, ' ')}
-      </div>
+// ────────────────────────────────────────────────────────────
+// SHARED CSS  (DOCX-safe — no flexbox, no grid, no shadows)
+// ────────────────────────────────────────────────────────────
+function sharedCSS() {
+  return `
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: Georgia, 'Times New Roman', serif;
+      font-size: 11pt;
+      line-height: 1.75;
+      color: ${C.text};
+      background: ${C.white};
+      margin: 0;
+      padding: 0;
+    }
+    /* ── Cover ── */
+    .cover {
+      background-color: ${C.ink};
+      color: ${C.white};
+      padding: 52px 48px 44px;
+      text-align: center;
+      page-break-after: always;
+    }
+    .cover-brand {
+      font-family: Georgia, serif;
+      font-size: 11pt;
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+      color: ${C.gold};
+      margin-bottom: 32px;
+    }
+    .cover-title {
+      font-family: Georgia, serif;
+      font-size: 26pt;
+      font-weight: normal;
+      color: ${C.white};
+      line-height: 1.3;
+      margin-bottom: 8px;
+    }
+    .cover-subtitle {
+      font-family: Georgia, serif;
+      font-size: 13pt;
+      color: rgba(255,255,255,0.65);
+      margin-bottom: 36px;
+      font-style: italic;
+    }
+    .cover-divider {
+      border: none;
+      border-top: 1px solid rgba(255,255,255,0.2);
+      width: 60px;
+      margin: 0 auto 32px;
+    }
+    .cover-meta-table {
+      width: auto;
+      margin: 0 auto;
+      border-collapse: collapse;
+    }
+    .cover-meta-table td {
+      padding: 4px 16px;
+      font-size: 10pt;
+      color: rgba(255,255,255,0.7);
+      text-align: left;
+    }
+    .cover-meta-table td.lbl {
+      color: ${C.gold};
+      font-size: 8pt;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      text-align: right;
+      padding-right: 12px;
+    }
+    .cover-disclaimer {
+      margin-top: 40px;
+      font-size: 7.5pt;
+      color: rgba(255,255,255,0.3);
+      line-height: 1.5;
+      font-style: italic;
+    }
+
+    /* ── Page wrapper ── */
+    .page { padding: 44px 52px; max-width: 800px; margin: 0 auto; }
+
+    /* ── Table of contents ── */
+    .toc-title {
+      font-family: Georgia, serif;
+      font-size: 14pt;
+      color: ${C.dark};
+      border-bottom: 2px solid ${C.gold};
+      padding-bottom: 8px;
+      margin-bottom: 20px;
+    }
+    .toc-table { width: 100%; border-collapse: collapse; }
+    .toc-table td { padding: 5px 0; font-size: 10pt; }
+    .toc-table td.toc-num { color: ${C.gold}; font-size: 9pt; width: 28px; }
+    .toc-table td.toc-dots { color: ${C.border}; padding: 0 4px; }
+
+    /* ── Section headers ── */
+    .section-header {
+      background-color: ${C.dark};
+      color: ${C.white};
+      padding: 12px 20px;
+      margin-top: 36px;
+      margin-bottom: 0;
+      page-break-after: avoid;
+    }
+    .section-header-num {
+      font-size: 8pt;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: ${C.gold};
+      display: block;
+      margin-bottom: 2px;
+    }
+    .section-header-title {
+      font-family: Georgia, serif;
+      font-size: 15pt;
+      font-weight: normal;
+      color: ${C.white};
+    }
+
+    /* ── Subsection headers ── */
+    .subsection {
+      font-family: Georgia, serif;
+      font-size: 12pt;
+      color: ${C.blue};
+      border-left: 3px solid ${C.gold};
+      padding-left: 10px;
+      margin-top: 24px;
+      margin-bottom: 10px;
+      page-break-after: avoid;
+    }
+
+    /* ── Body prose ── */
+    .prose p {
+      margin-bottom: 14px;
+      font-size: 11pt;
+      line-height: 1.8;
+      color: ${C.text};
+      text-align: justify;
+    }
+    .prose p:last-child { margin-bottom: 0; }
+
+    /* ── Number reference table ── */
+    .num-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 18px 0 24px;
+      font-size: 10pt;
+    }
+    .num-table th {
+      background-color: ${C.header};
+      color: ${C.white};
+      padding: 9px 14px;
+      text-align: left;
+      font-size: 8.5pt;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      font-weight: bold;
+    }
+    .num-table td {
+      padding: 9px 14px;
+      border-bottom: 1px solid ${C.border};
+      vertical-align: top;
+    }
+    .num-table tr:nth-child(even) td { background-color: ${C.alt}; }
+    .num-table tr:last-child td { border-bottom: none; }
+    .num-badge {
+      background-color: ${C.gold};
+      color: ${C.white};
+      font-size: 11pt;
+      font-weight: bold;
+      padding: 2px 9px;
+      display: inline-block;
+    }
+    .num-table td.num-col { text-align: center; }
+
+    /* ── Insight box ── */
+    .insight {
+      background-color: ${C.goldlt};
+      border-left: 4px solid ${C.gold};
+      padding: 14px 18px;
+      margin: 18px 0;
+    }
+    .insight-title {
+      font-size: 8pt;
+      font-weight: bold;
+      text-transform: uppercase;
+      letter-spacing: 0.14em;
+      color: ${C.gold};
+      margin-bottom: 6px;
+    }
+    .insight p {
+      font-size: 10.5pt;
+      line-height: 1.7;
+      color: ${C.text};
+      margin-bottom: 8px;
+    }
+    .insight p:last-child { margin-bottom: 0; }
+
+    /* ── Callout box (karmic / master) ── */
+    .callout {
+      background-color: ${C.roselt};
+      border-left: 4px solid ${C.rose};
+      padding: 14px 18px;
+      margin: 18px 0;
+    }
+    .callout-title {
+      font-size: 8pt;
+      font-weight: bold;
+      text-transform: uppercase;
+      letter-spacing: 0.14em;
+      color: ${C.rose};
+      margin-bottom: 6px;
+    }
+    .callout p {
+      font-size: 10.5pt;
+      line-height: 1.7;
+      color: ${C.text};
+      margin-bottom: 8px;
+    }
+    .callout p:last-child { margin-bottom: 0; }
+
+    /* ── Teal callout (timing / transits) ── */
+    .callout-teal {
+      background-color: ${C.tealt};
+      border-left: 4px solid ${C.teal};
+      padding: 14px 18px;
+      margin: 18px 0;
+    }
+    .callout-teal-title {
+      font-size: 8pt;
+      font-weight: bold;
+      text-transform: uppercase;
+      letter-spacing: 0.14em;
+      color: ${C.teal};
+      margin-bottom: 6px;
+    }
+    .callout-teal p {
+      font-size: 10.5pt;
+      line-height: 1.7;
+      color: ${C.text};
+      margin-bottom: 8px;
+    }
+    .callout-teal p:last-child { margin-bottom: 0; }
+
+    /* ── Closing synthesis ── */
+    .closing {
+      background-color: ${C.ink};
+      color: ${C.white};
+      padding: 36px 40px;
+      margin-top: 40px;
+      page-break-before: always;
+    }
+    .closing-title {
+      font-family: Georgia, serif;
+      font-size: 14pt;
+      color: ${C.gold};
+      margin-bottom: 20px;
+      letter-spacing: 0.06em;
+    }
+    .closing p {
+      font-size: 11pt;
+      line-height: 1.85;
+      color: rgba(255,255,255,0.85);
+      margin-bottom: 16px;
+      text-align: justify;
+    }
+    .closing p:last-child {
+      color: ${C.white};
+      font-style: italic;
+      font-size: 11.5pt;
+      margin-bottom: 0;
+    }
+
+    /* ── Footer ── */
+    .footer {
+      text-align: center;
+      padding: 24px;
+      border-top: 1px solid ${C.border};
+      margin-top: 32px;
+      font-size: 8pt;
+      color: ${C.muted};
+      line-height: 1.6;
+    }
+
+    /* ── Utility ── */
+    .page-break { page-break-before: always; }
+    .avoid-break { page-break-inside: avoid; }
+  `;
+}
+
+// ────────────────────────────────────────────────────────────
+// PROSE HELPER  — converts \\n\\n delimited text to <p> tags
+// ────────────────────────────────────────────────────────────
+function prose(text, className = 'prose') {
+  if (!text) return '';
+  const paragraphs = String(text)
+    .split(/\n\n+/)
+    .map(s => s.trim())
+    .filter(Boolean)
+    .map(s => `<p>${s.replace(/\n/g, ' ')}</p>`)
+    .join('\n');
+  return `<div class="${className}">${paragraphs}</div>`;
+}
+
+// ────────────────────────────────────────────────────────────
+// BUILD HTML FROM CLAUDE JSON  (engine=claude, v2.0)
+// ────────────────────────────────────────────────────────────
+function buildPaidHTMLFromClaudeJSON(d, profile) {
+  const name     = profile.name_used || profile.name || 'Client';
+  const dobFmt   = profile.dob_fmt   || profile.dob_used || '';
+  const nameParts = (name).trim().split(/\s+/);
+  const firstName = (nameParts[0].length === 1 && nameParts[1]) ? nameParts[1] : nameParts[0];
+  const currentYear = new Date().getFullYear();
+  const genDate  = new Date().toLocaleDateString('en-IN', { day:'numeric', month:'long', year:'numeric' });
+
+  const p = profile; // shorthand
+
+  // Pinnacle age labels
+  const p1Label = p.pinnacle_1_end_age ? `birth – age ${p.pinnacle_1_end_age}` : 'first phase';
+  const p2Label = p.pinnacle_2_start_age && p.pinnacle_2_end_age ? `age ${p.pinnacle_2_start_age}–${p.pinnacle_2_end_age}` : 'second phase';
+  const p3Label = p.pinnacle_3_start_age && p.pinnacle_3_end_age ? `age ${p.pinnacle_3_start_age}–${p.pinnacle_3_end_age}` : 'third phase';
+  const p4Label = p.pinnacle_4_start_age ? `age ${p.pinnacle_4_start_age}+` : 'final phase';
+
+  const masterList   = Array.isArray(p.master_numbers_found) && p.master_numbers_found.length ? p.master_numbers_found : [];
+  const karmicList   = Array.isArray(p.karmic_debt_numbers)  && p.karmic_debt_numbers.length  ? p.karmic_debt_numbers  : [];
+  const hiddenList   = Array.isArray(p.hidden_passions)  && p.hidden_passions.length  ? p.hidden_passions.join(', ')  : 'None';
+  const missingList  = Array.isArray(p.missing_numbers)  && p.missing_numbers.length  ? p.missing_numbers.join(', ')  : 'None';
+  const lessonList   = Array.isArray(p.karmic_lessons)   && p.karmic_lessons.length   ? p.karmic_lessons.join(', ')   : 'None';
+
+  const totalLetters = (p.plane_mental_count||0)+(p.plane_physical_count||0)+(p.plane_emotional_count||0)+(p.plane_intuitive_count||0);
+  const pct = n => totalLetters ? Math.round((n||0)/totalLetters*100) : 0;
+
+  // ── Section builder helpers ─────────────────────────────
+  function sectionHeader(num, title) {
+    return `
+    <div class="section-header avoid-break">
+      <span class="section-header-num">Section ${num}</span>
+      <span class="section-header-title">${title}</span>
     </div>
-  `).join('');
+    <div class="page" style="padding-top:24px;">`;
+  }
+  function closeSectionDiv() { return `</div>`; }
 
+  // ── TOC entries ─────────────────────────────────────────
+  const tocEntries = [
+    { num:'1',  title:'Your Numerological Portrait' },
+    { num:'2',  title:`Psychic Number ${p.psychic_number} — The Instinctive Self` },
+    { num:'3',  title:`Destiny Number ${p.destiny_number} — The Life Direction` },
+    { num:'4',  title:`The ${p.pd_combination || `${p.psychic_number}-${p.destiny_number}`} Combination` },
+    { num:'5',  title:`Name & Soul Urge — Outer Talent Meets Inner Hunger` },
+    { num:'6',  title:`Personality Number ${p.personality_number} — How the World Sees You` },
+    { num:'7',  title:`The Letters of Your Name` },
+    { num:'8',  title:`Planes of Expression` },
+    { num:'9',  title:`Hidden Passions & Karmic Lessons` },
+    ...(p.has_karmic_debt && karmicList.length ? [{ num:'10', title:`Karmic Debt — The Soul's Accelerated Curriculum` }] : []),
+    ...(masterList.length ? [{ num: p.has_karmic_debt && karmicList.length ? '11' : '10', title:`Master Number${masterList.length>1?'s':''} ${masterList.join(' & ')}` }] : []),
+    { num:'12', title:`Life Cycles — Pinnacles & Challenges` },
+    { num:'13', title:`Current Timing — ${currentYear} and Beyond` },
+    { num:'14', title:`Active Letter Transits` },
+    { num:'15', title:`Bridge Numbers — Closing the Gaps` },
+    { num:'16', title:`Maturity & Power — Who You Are Becoming` },
+    { num:'17', title:`Closing Synthesis` },
+  ];
+
+  // ── Assemble HTML ───────────────────────────────────────
   return `<!DOCTYPE html>
 <html lang="en">
-<head><meta charset="UTF-8">
-<style>
-  body { font-family:'Segoe UI',sans-serif; margin:0; padding:20px; color:${C.dark}; font-size:14px; }
-  .cover { background:${C.dark};color:#fff;padding:30px;text-align:center;margin-bottom:20px; }
-  .cover h1 { margin:0 0 8px 0; font-size:26px; }
-  .footer { text-align:center;color:#999;font-size:11px;margin-top:30px;padding-top:15px;border-top:1px solid #ddd; }
-</style>
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Numerology Reading — ${name}</title>
+<style>${sharedCSS()}</style>
 </head>
 <body>
+
+<!-- ════════════════════════════════════════════════════════
+     COVER PAGE
+════════════════════════════════════════════════════════ -->
 <div class="cover">
-  <h1>✨ Numerology Reading for ${name} ✨</h1>
-  <p>Date of Birth: ${profile.dob_fmt || profile.dob_used || ''} &nbsp;|&nbsp; Chaldean System</p>
+  <div class="cover-brand">✦ Occult Pulse ✦</div>
+  <div class="cover-title">Complete Chaldean<br>Numerology Reading</div>
+  <div class="cover-subtitle">A personal blueprint in numbers</div>
+  <hr class="cover-divider"/>
+  <table class="cover-meta-table">
+    <tr>
+      <td class="lbl">Prepared for</td>
+      <td>${name}</td>
+    </tr>
+    <tr>
+      <td class="lbl">Date of Birth</td>
+      <td>${dobFmt}</td>
+    </tr>
+    <tr>
+      <td class="lbl">Ruling Planet</td>
+      <td>${p.ruling_planet || '—'}</td>
+    </tr>
+    <tr>
+      <td class="lbl">PD Combination</td>
+      <td>${p.pd_combination || `${p.psychic_number}-${p.destiny_number}`}</td>
+    </tr>
+    <tr>
+      <td class="lbl">Numerology System</td>
+      <td>Chaldean (Ancient Babylonian)</td>
+    </tr>
+    <tr>
+      <td class="lbl">Generated on</td>
+      <td>${genDate}</td>
+    </tr>
+  </table>
+  ${masterList.length ? `<div style="margin-top:28px;display:inline-block;background:rgba(183,134,11,0.2);border:1px solid rgba(183,134,11,0.5);padding:8px 20px;">
+    <span style="color:${C.gold};font-size:9pt;letter-spacing:0.18em;text-transform:uppercase;">⭐ Master Number ${masterList.join(' & ')} Detected</span>
+  </div>` : ''}
+  ${karmicList.length ? `<div style="margin-top:12px;display:inline-block;background:rgba(146,43,33,0.2);border:1px solid rgba(146,43,33,0.4);padding:8px 20px;">
+    <span style="color:#e8a89c;font-size:9pt;letter-spacing:0.18em;text-transform:uppercase;">Karmic Compound ${karmicList.join(', ')} Present</span>
+  </div>` : ''}
+  <div class="cover-disclaimer">
+    This reading is prepared for personal reflection, self-understanding, and growth.<br>
+    It is not a prediction of future events and does not constitute medical, legal, or financial advice.<br>
+    Numerology is a symbolic system — interpret it with openness and your own discernment.
+  </div>
 </div>
-${cardRows}
+
+<!-- ════════════════════════════════════════════════════════
+     TABLE OF CONTENTS
+════════════════════════════════════════════════════════ -->
+<div class="page" style="padding-top:40px;page-break-after:always;">
+  <div class="toc-title">Contents</div>
+  <table class="toc-table">
+    ${tocEntries.map(e => `
+    <tr>
+      <td class="toc-num">${e.num}</td>
+      <td>${e.title}</td>
+    </tr>`).join('')}
+  </table>
+</div>
+
+<!-- ════════════════════════════════════════════════════════
+     CORE NUMBERS REFERENCE TABLE
+════════════════════════════════════════════════════════ -->
+<div class="page" style="padding-top:32px;page-break-after:always;">
+  <div style="font-family:Georgia,serif;font-size:16pt;color:${C.dark};border-bottom:2px solid ${C.gold};padding-bottom:10px;margin-bottom:20px;">
+    Your Core Numbers at a Glance
+  </div>
+  <table class="num-table">
+    <thead>
+      <tr>
+        <th>Number Type</th>
+        <th style="text-align:center;">Value</th>
+        <th>Compound</th>
+        <th>Ruling Influence</th>
+        <th>What It Governs</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Psychic Number</td>
+        <td class="num-col"><span class="num-badge">${p.psychic_number}</span></td>
+        <td>${p.psychic_compound && p.psychic_compound !== p.psychic_number ? p.psychic_compound : '—'}</td>
+        <td>${p.ruling_planet || '—'}</td>
+        <td>Instinctive self — who you are before the world shaped you</td>
+      </tr>
+      <tr>
+        <td>Destiny Number</td>
+        <td class="num-col"><span class="num-badge">${p.destiny_number}</span></td>
+        <td>${p.destiny_compound && p.destiny_compound !== p.destiny_number ? p.destiny_compound : '—'}</td>
+        <td>—</td>
+        <td>Life direction — who you are becoming across your entire life</td>
+      </tr>
+      <tr>
+        <td>Name Number</td>
+        <td class="num-col"><span class="num-badge">${p.name_number}</span></td>
+        <td>${p.name_compound && p.name_compound !== p.name_number ? p.name_compound : '—'}</td>
+        <td>—</td>
+        <td>Outer talent — what your name projects into the world</td>
+      </tr>
+      <tr>
+        <td>Soul Urge</td>
+        <td class="num-col"><span class="num-badge">${p.soul_urge_number}</span></td>
+        <td>${p.soul_urge_compound && p.soul_urge_compound !== p.soul_urge_number ? p.soul_urge_compound : '—'}</td>
+        <td>—</td>
+        <td>Inner hunger — what the soul privately craves</td>
+      </tr>
+      <tr>
+        <td>Personality</td>
+        <td class="num-col"><span class="num-badge">${p.personality_number}</span></td>
+        <td>${p.personality_compound && p.personality_compound !== p.personality_number ? p.personality_compound : '—'}</td>
+        <td>—</td>
+        <td>First impression — how the world perceives you before knowing you</td>
+      </tr>
+      <tr>
+        <td>Life Path</td>
+        <td class="num-col"><span class="num-badge">${p.life_path_number || p.destiny_number}</span></td>
+        <td>${p.life_path_compound && p.life_path_compound !== p.life_path_number ? p.life_path_compound : '—'}</td>
+        <td>—</td>
+        <td>Soul's journey — the path the soul chose for this lifetime</td>
+      </tr>
+      <tr>
+        <td>Maturity</td>
+        <td class="num-col"><span class="num-badge">${p.maturity_number}</span></td>
+        <td>${p.maturity_compound && p.maturity_compound !== p.maturity_number ? p.maturity_compound : '—'}</td>
+        <td>—</td>
+        <td>Emerging self — who you are growing into after your mid-30s</td>
+      </tr>
+      <tr>
+        <td>Power Number</td>
+        <td class="num-col"><span class="num-badge">${p.power_number}</span></td>
+        <td>${p.power_compound && p.power_compound !== p.power_number ? p.power_compound : '—'}</td>
+        <td>—</td>
+        <td>Full potential — what becomes available at your highest functioning</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <table class="num-table" style="margin-top:28px;">
+    <thead>
+      <tr>
+        <th colspan="4">Additional Reference Numbers</th>
+      </tr>
+      <tr>
+        <th>Number</th><th style="text-align:center;">Value</th><th>Number</th><th style="text-align:center;">Value</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Personal Year (${currentYear})</td><td class="num-col"><span class="num-badge">${p.personal_year_number}</span></td>
+        <td>Universal Year (${currentYear})</td><td class="num-col"><span class="num-badge">${p.universal_year_number}</span></td>
+      </tr>
+      <tr>
+        <td>Current Pinnacle</td><td class="num-col"><span class="num-badge">${p.current_pinnacle}</span></td>
+        <td>Current Challenge</td><td class="num-col"><span class="num-badge">${p.current_challenge}</span></td>
+      </tr>
+      <tr>
+        <td>Essence Number</td><td class="num-col"><span class="num-badge">${p.essence_number || '—'}</span></td>
+        <td>Subconscious Self</td><td class="num-col"><span class="num-badge">${p.subconscious_self ?? '—'}/8</span></td>
+      </tr>
+      <tr>
+        <td>Rational Thought</td><td class="num-col"><span class="num-badge">${p.rational_thought_number ?? '—'}</span></td>
+        <td>Balance Number</td><td class="num-col"><span class="num-badge">${p.balance_number ?? '—'}</span></td>
+      </tr>
+      <tr>
+        <td>Soul–Expression Bridge</td><td class="num-col"><span class="num-badge">${p.soul_expression_bridge ?? '—'}</span></td>
+        <td>Life–Personality Bridge</td><td class="num-col"><span class="num-badge">${p.life_personality_bridge ?? '—'}</span></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="insight avoid-break">
+    <div class="insight-title">Name Letter Analysis</div>
+    <table style="width:100%;border-collapse:collapse;font-size:10pt;">
+      <tr>
+        <td style="padding:4px 12px 4px 0;"><strong>Cornerstone</strong> (first letter)</td>
+        <td style="padding:4px 8px;"><span class="num-badge" style="font-size:12pt;">${p.cornerstone || '?'}</span></td>
+        <td style="padding:4px;color:${C.muted};">value ${p.cornerstone_value || '?'} — how you begin</td>
+      </tr>
+      <tr>
+        <td style="padding:4px 12px 4px 0;"><strong>Capstone</strong> (last letter)</td>
+        <td style="padding:4px 8px;"><span class="num-badge" style="font-size:12pt;">${p.capstone || '?'}</span></td>
+        <td style="padding:4px;color:${C.muted};">value ${p.capstone_value || '?'} — how you complete</td>
+      </tr>
+      <tr>
+        <td style="padding:4px 12px 4px 0;"><strong>First Vowel</strong></td>
+        <td style="padding:4px 8px;"><span class="num-badge" style="font-size:12pt;">${p.first_vowel || '?'}</span></td>
+        <td style="padding:4px;color:${C.muted};">value ${p.first_vowel_value || '?'} — instinctive emotional response</td>
+      </tr>
+    </table>
+  </div>
+
+  <div class="insight avoid-break" style="margin-top:16px;">
+    <div class="insight-title">Planes of Expression</div>
+    <table style="width:100%;border-collapse:collapse;font-size:10pt;">
+      <tr>
+        <td style="padding:3px 0;width:110px;">Mental</td>
+        <td style="padding:3px 8px;width:40px;text-align:center;font-weight:bold;">${p.plane_mental_count || 0}</td>
+        <td style="padding:3px 0;color:${C.muted};">${pct(p.plane_mental_count)}% of name letters</td>
+      </tr>
+      <tr>
+        <td style="padding:3px 0;">Physical</td>
+        <td style="padding:3px 8px;text-align:center;font-weight:bold;">${p.plane_physical_count || 0}</td>
+        <td style="padding:3px 0;color:${C.muted};">${pct(p.plane_physical_count)}% of name letters</td>
+      </tr>
+      <tr>
+        <td style="padding:3px 0;">Emotional</td>
+        <td style="padding:3px 8px;text-align:center;font-weight:bold;">${p.plane_emotional_count || 0}</td>
+        <td style="padding:3px 0;color:${C.muted};">${pct(p.plane_emotional_count)}% of name letters</td>
+      </tr>
+      <tr>
+        <td style="padding:3px 0;">Intuitive</td>
+        <td style="padding:3px 8px;text-align:center;font-weight:bold;">${p.plane_intuitive_count || 0}</td>
+        <td style="padding:3px 0;color:${C.muted};">${pct(p.plane_intuitive_count)}% of name letters</td>
+      </tr>
+    </table>
+    <div style="margin-top:8px;font-size:10pt;">
+      <strong>Dominant Plane:</strong> ${(p.dominant_plane||'').charAt(0).toUpperCase()+(p.dominant_plane||'').slice(1)} &nbsp;·&nbsp;
+      <strong>Hidden Passions:</strong> ${hiddenList} &nbsp;·&nbsp;
+      <strong>Karmic Lessons:</strong> ${lessonList}
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════════════════
+     SECTION 1 — OPENING PORTRAIT
+════════════════════════════════════════════════════════ -->
+${sectionHeader('1', 'Your Numerological Portrait')}
+  ${prose(d.opening_portrait)}
+${closeSectionDiv()}
+
+<!-- ════════════════════════════════════════════════════════
+     SECTION 2 — PSYCHIC NUMBER
+════════════════════════════════════════════════════════ -->
+${sectionHeader('2', `Psychic Number ${p.psychic_number} — The Instinctive Self`)}
+  <div class="insight avoid-break">
+    <div class="insight-title">At a Glance</div>
+    <p><strong>Number:</strong> ${p.psychic_number}${p.psychic_compound && p.psychic_compound !== p.psychic_number ? ` (compound ${p.psychic_compound})` : ''} &nbsp;·&nbsp; <strong>Ruling Planet:</strong> ${p.ruling_planet || '—'} &nbsp;·&nbsp; <strong>Born on day:</strong> ${p.birth_day_number}</p>
+  </div>
+  <div class="subsection">Interpretation</div>
+  ${prose(d.psychic?.interpretation)}
+  <div class="subsection">Your Gift</div>
+  ${prose(d.psychic?.gift)}
+  <div class="subsection">The Shadow Side</div>
+  ${prose(d.psychic?.shadow)}
+  <div class="subsection">Vedic Planetary Context</div>
+  ${prose(d.psychic?.vedic_context)}
+${closeSectionDiv()}
+
+<!-- ════════════════════════════════════════════════════════
+     SECTION 3 — DESTINY NUMBER
+════════════════════════════════════════════════════════ -->
+${sectionHeader('3', `Destiny Number ${p.destiny_number} — The Life Direction`)}
+  <div class="insight avoid-break">
+    <div class="insight-title">At a Glance</div>
+    <p><strong>Number:</strong> ${p.destiny_number}${p.destiny_compound && p.destiny_compound !== p.destiny_number ? ` (compound ${p.destiny_compound})` : ''} &nbsp;·&nbsp; <strong>Life Path:</strong> ${p.life_path_number || p.destiny_number}</p>
+  </div>
+  <div class="subsection">Interpretation</div>
+  ${prose(d.destiny?.interpretation)}
+  <div class="subsection">The Compound's Meaning</div>
+  ${prose(d.destiny?.compound_meaning)}
+  <div class="subsection">Soul Direction</div>
+  ${prose(d.destiny?.soul_direction)}
+${closeSectionDiv()}
+
+<!-- ════════════════════════════════════════════════════════
+     SECTION 4 — PD COMBINATION
+════════════════════════════════════════════════════════ -->
+${sectionHeader('4', `The ${p.pd_combination || `${p.psychic_number}-${p.destiny_number}`} Combination`)}
+  <div class="subsection">How These Two Energies Meet</div>
+  ${prose(d.pd_combination?.interpretation)}
+  <div class="subsection">The Daily Dynamic</div>
+  ${prose(d.pd_combination?.tension_or_flow)}
+${closeSectionDiv()}
+
+<!-- ════════════════════════════════════════════════════════
+     SECTION 5 — NAME & SOUL URGE
+════════════════════════════════════════════════════════ -->
+${sectionHeader('5', `Name & Soul Urge — Outer Talent Meets Inner Hunger`)}
+  <div class="insight avoid-break">
+    <div class="insight-title">At a Glance</div>
+    <p><strong>Name Number ${p.name_number}</strong>${p.name_compound && p.name_compound !== p.name_number ? ` (compound ${p.name_compound})` : ''} — what your name projects outward &nbsp;·&nbsp; <strong>Soul Urge ${p.soul_urge_number}</strong>${p.soul_urge_compound && p.soul_urge_compound !== p.soul_urge_number ? ` (compound ${p.soul_urge_compound})` : ''} — what the soul privately craves</p>
+  </div>
+  <div class="subsection">Name Number ${p.name_number}</div>
+  ${prose(d.name_soul_urge?.name_interpretation)}
+  <div class="subsection">Soul Urge ${p.soul_urge_number}</div>
+  ${prose(d.name_soul_urge?.soul_urge_interpretation)}
+  <div class="subsection">The Gap Between Them</div>
+  ${prose(d.name_soul_urge?.gap_analysis)}
+${closeSectionDiv()}
+
+<!-- ════════════════════════════════════════════════════════
+     SECTION 6 — PERSONALITY NUMBER
+════════════════════════════════════════════════════════ -->
+${sectionHeader('6', `Personality Number ${p.personality_number} — How the World Sees You`)}
+  <div class="insight avoid-break">
+    <div class="insight-title">At a Glance</div>
+    <p><strong>Personality Number ${p.personality_number}</strong>${p.personality_compound && p.personality_compound !== p.personality_number ? ` (compound ${p.personality_compound})` : ''} — the face you show before you are known &nbsp;·&nbsp; <strong>Psychic Number ${p.psychic_number}</strong> — who you actually are inside</p>
+  </div>
+  <div class="subsection">First Impressions</div>
+  ${prose(d.personality?.interpretation)}
+  <div class="subsection">The Mask and the Self</div>
+  ${prose(d.personality?.mask_vs_self)}
+${closeSectionDiv()}
+
+<!-- ════════════════════════════════════════════════════════
+     SECTION 7 — NAME LETTERS
+════════════════════════════════════════════════════════ -->
+${sectionHeader('7', `The Letters of Your Name`)}
+  <div class="subsection">Cornerstone — ${p.cornerstone || '?'} (value ${p.cornerstone_value || '?'}) — How You Begin</div>
+  ${prose(d.name_letters?.cornerstone)}
+  <div class="subsection">Capstone — ${p.capstone || '?'} (value ${p.capstone_value || '?'}) — How You Complete</div>
+  ${prose(d.name_letters?.capstone)}
+  <div class="subsection">First Vowel — ${p.first_vowel || '?'} (value ${p.first_vowel_value || '?'}) — Your Emotional Temperature</div>
+  ${prose(d.name_letters?.first_vowel)}
+  <div class="subsection">What These Three Letters Together Reveal</div>
+  ${prose(d.name_letters?.synthesis)}
+${closeSectionDiv()}
+
+<!-- ════════════════════════════════════════════════════════
+     SECTION 8 — PLANES OF EXPRESSION
+════════════════════════════════════════════════════════ -->
+${sectionHeader('8', `Planes of Expression`)}
+  <table class="num-table avoid-break">
+    <thead>
+      <tr><th>Plane</th><th style="text-align:center;">Letters</th><th style="text-align:center;">%</th><th>How This Plane Operates</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Mental</td><td style="text-align:center;font-weight:bold;">${p.plane_mental_count || 0}</td><td style="text-align:center;">${pct(p.plane_mental_count)}%</td><td>Analysis, ideas, intellectual understanding</td></tr>
+      <tr><td>Physical</td><td style="text-align:center;font-weight:bold;">${p.plane_physical_count || 0}</td><td style="text-align:center;">${pct(p.plane_physical_count)}%</td><td>Action, results, tangible output</td></tr>
+      <tr><td>Emotional</td><td style="text-align:center;font-weight:bold;">${p.plane_emotional_count || 0}</td><td style="text-align:center;">${pct(p.plane_emotional_count)}%</td><td>Feeling, empathy, relational intelligence</td></tr>
+      <tr><td>Intuitive</td><td style="text-align:center;font-weight:bold;">${p.plane_intuitive_count || 0}</td><td style="text-align:center;">${pct(p.plane_intuitive_count)}%</td><td>Inner knowing, sensing before thinking</td></tr>
+    </tbody>
+  </table>
+  <div class="subsection">How You Process the World</div>
+  ${prose(d.planes?.interpretation)}
+  <div class="subsection">Your Dominant Plane: ${(p.dominant_plane||'').charAt(0).toUpperCase()+(p.dominant_plane||'').slice(1)}</div>
+  ${prose(d.planes?.dominant_meaning)}
+  <div class="subsection">Subconscious Self — ${p.subconscious_self ?? '?'}/8</div>
+  ${prose(d.planes?.subconscious_self)}
+${closeSectionDiv()}
+
+<!-- ════════════════════════════════════════════════════════
+     SECTION 9 — HIDDEN PATTERNS
+════════════════════════════════════════════════════════ -->
+${sectionHeader('9', `Hidden Passions & Karmic Lessons`)}
+  <div class="insight avoid-break">
+    <div class="insight-title">Pattern Summary</div>
+    <p><strong>Hidden Passions:</strong> ${hiddenList} &nbsp;·&nbsp; <strong>Karmic Lessons (Missing):</strong> ${lessonList} &nbsp;·&nbsp; <strong>Missing Numbers:</strong> ${missingList}</p>
+  </div>
+  <div class="subsection">Hidden Passions</div>
+  ${prose(d.hidden_patterns?.hidden_passions)}
+  <div class="subsection">Karmic Lessons</div>
+  ${prose(d.hidden_patterns?.karmic_lessons)}
+  <div class="subsection">The Deeper Pattern</div>
+  ${prose(d.hidden_patterns?.synthesis)}
+${closeSectionDiv()}
+
+<!-- ════════════════════════════════════════════════════════
+     SECTION 10 — KARMIC DEBT (conditional)
+════════════════════════════════════════════════════════ -->
+${p.has_karmic_debt && karmicList.length && d.karmic_debt ? `
+${sectionHeader('10', `Karmic Debt — The Soul's Accelerated Curriculum`)}
+  <div class="callout avoid-break">
+    <div class="callout-title">Karmic Compound${karmicList.length > 1 ? 's' : ''} Detected</div>
+    <p>Your chart carries the karmic compound${karmicList.length > 1 ? 's' : ''} <strong>${karmicList.join(' and ')}</strong>, located in your <strong>${(Array.isArray(p.karmic_debt_locations) ? p.karmic_debt_locations : []).join(' and ')}</strong>. This is a significant soul-level pattern — not a punishment, but an accelerated curriculum the soul chose.</p>
+  </div>
+  ${prose(d.karmic_debt)}
+${closeSectionDiv()}` : ''}
+
+<!-- ════════════════════════════════════════════════════════
+     SECTION 11 — MASTER NUMBERS (conditional)
+════════════════════════════════════════════════════════ -->
+${masterList.length && d.master_numbers ? `
+${sectionHeader('11', `Master Number${masterList.length > 1 ? 's' : ''} ${masterList.join(' & ')}`)}
+  <div class="callout avoid-break">
+    <div class="callout-title">Master Number Detected ⭐</div>
+    <p>Your chart carries Master Number${masterList.length > 1 ? 's' : ''} <strong>${masterList.join(' and ')}</strong>. This appears in fewer than ${masterList.includes(22) ? '3%' : '8%'} of charts. Master Numbers carry both heightened gifts and heightened responsibility.</p>
+  </div>
+  ${prose(d.master_numbers)}
+${closeSectionDiv()}` : ''}
+
+<!-- ════════════════════════════════════════════════════════
+     SECTION 12 — LIFE CYCLES
+════════════════════════════════════════════════════════ -->
+${sectionHeader('12', `Life Cycles — Pinnacles & Challenges`)}
+  <table class="num-table avoid-break">
+    <thead>
+      <tr><th>Pinnacle</th><th style="text-align:center;">Number</th><th>Period</th><th>Active?</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Pinnacle 1</td>
+        <td class="num-col"><span class="num-badge">${p.pinnacle_1 || '—'}</span></td>
+        <td>${p1Label}</td>
+        <td>${p.current_pinnacle === p.pinnacle_1 && !p.pinnacle_2_start_age ? '✓ Active now' : ''}</td>
+      </tr>
+      <tr>
+        <td>Pinnacle 2</td>
+        <td class="num-col"><span class="num-badge">${p.pinnacle_2 || '—'}</span></td>
+        <td>${p2Label}</td>
+        <td>${p.current_pinnacle === p.pinnacle_2 ? '✓ Active now' : ''}</td>
+      </tr>
+      <tr>
+        <td>Pinnacle 3</td>
+        <td class="num-col"><span class="num-badge">${p.pinnacle_3 || '—'}</span></td>
+        <td>${p3Label}</td>
+        <td>${p.current_pinnacle === p.pinnacle_3 ? '✓ Active now' : ''}</td>
+      </tr>
+      <tr>
+        <td>Pinnacle 4</td>
+        <td class="num-col"><span class="num-badge">${p.pinnacle_4 || '—'}</span></td>
+        <td>${p4Label}</td>
+        <td>${p.current_pinnacle === p.pinnacle_4 ? '✓ Active now' : ''}</td>
+      </tr>
+    </tbody>
+  </table>
+  <table class="num-table avoid-break" style="margin-top:20px;">
+    <thead>
+      <tr><th>Challenge</th><th style="text-align:center;">Number</th><th>Life Phase</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Challenge 1</td><td class="num-col"><span class="num-badge">${p.challenge_1 ?? '—'}</span></td><td>Youth and early life</td></tr>
+      <tr><td>Challenge 2</td><td class="num-col"><span class="num-badge">${p.challenge_2 ?? '—'}</span></td><td>Young adulthood</td></tr>
+      <tr><td>Challenge 3</td><td class="num-col"><span class="num-badge">${p.challenge_3 ?? '—'}</span></td><td>Mid-life</td></tr>
+      <tr><td>Challenge 4</td><td class="num-col"><span class="num-badge">${p.challenge_4 ?? '—'}</span></td><td>Later life — the lifelong theme</td></tr>
+    </tbody>
+  </table>
+  <div class="subsection">The Arc of Your Four Pinnacles</div>
+  ${prose(d.life_cycles?.pinnacle_map)}
+  <div class="subsection">Your Current Pinnacle — Pinnacle ${p.current_pinnacle}</div>
+  ${prose(d.life_cycles?.current_pinnacle)}
+  <div class="subsection">The Four Challenges</div>
+  ${prose(d.life_cycles?.challenge_map)}
+  <div class="subsection">Your Current Challenge — Challenge ${p.current_challenge}</div>
+  ${prose(d.life_cycles?.current_challenge)}
+${closeSectionDiv()}
+
+<!-- ════════════════════════════════════════════════════════
+     SECTION 13 — TIMING
+════════════════════════════════════════════════════════ -->
+${sectionHeader('13', `Current Timing — ${currentYear} and Beyond`)}
+  <div class="callout-teal avoid-break">
+    <div class="callout-teal-title">Your Numbers Right Now</div>
+    <p>
+      <strong>Personal Year ${p.personal_year_number}</strong> (${new Date().getFullYear()}) &nbsp;·&nbsp;
+      <strong>Personal Month ${p.personal_month_number || '—'}</strong> &nbsp;·&nbsp;
+      <strong>Universal Year ${p.universal_year_number}</strong>
+    </p>
+  </div>
+  <div class="subsection">Personal Year ${p.personal_year_number} in ${currentYear}</div>
+  ${prose(d.timing?.personal_year)}
+  <div class="subsection">Universal Year ${p.universal_year_number} — The Collective Current</div>
+  ${prose(d.timing?.universal_year)}
+  <div class="subsection">How These Years Work Together for You</div>
+  ${prose(d.timing?.year_synthesis)}
+${closeSectionDiv()}
+
+<!-- ════════════════════════════════════════════════════════
+     SECTION 14 — ACTIVE TRANSITS
+════════════════════════════════════════════════════════ -->
+${sectionHeader('14', `Active Letter Transits`)}
+  <div class="callout-teal avoid-break">
+    <div class="callout-teal-title">Your Active Letters Right Now</div>
+    <p>Three letters from your name are simultaneously active — one from each name segment. This specific combination applies only to you in this exact period.</p>
+    <table style="width:auto;border-collapse:collapse;margin-top:8px;font-size:10pt;">
+      <tr>
+        <td style="padding:4px 14px 4px 0;font-weight:bold;">Physical Transit</td>
+        <td style="padding:4px 8px;"><span class="num-badge" style="font-size:13pt;">${p.physical_transit || '?'}</span></td>
+        <td style="padding:4px;color:${C.muted};">value ${p.physical_transit_value || '?'} — outer world &amp; circumstances</td>
+      </tr>
+      <tr>
+        <td style="padding:4px 14px 4px 0;font-weight:bold;">Mental Transit</td>
+        <td style="padding:4px 8px;"><span class="num-badge" style="font-size:13pt;">${p.mental_transit || '?'}</span></td>
+        <td style="padding:4px;color:${C.muted};">value ${p.mental_transit_value || '?'} — inner life &amp; thinking</td>
+      </tr>
+      <tr>
+        <td style="padding:4px 14px 4px 0;font-weight:bold;">Spiritual Transit</td>
+        <td style="padding:4px 8px;"><span class="num-badge" style="font-size:13pt;">${p.spiritual_transit || '?'}</span></td>
+        <td style="padding:4px;color:${C.muted};">value ${p.spiritual_transit_value || '?'} — karmic &amp; spiritual layer</td>
+      </tr>
+      <tr style="border-top:1px solid ${C.border};">
+        <td style="padding:8px 14px 4px 0;font-weight:bold;">Essence Number</td>
+        <td style="padding:8px 8px 4px;"><span class="num-badge" style="font-size:13pt;">${p.essence_number || '?'}</span></td>
+        <td style="padding:8px 0 4px;color:${C.muted};">sum of all three — overarching karmic theme</td>
+      </tr>
+    </table>
+  </div>
+  <div class="subsection">Physical Transit — Letter ${p.physical_transit || '?'}</div>
+  ${prose(d.transits?.physical)}
+  <div class="subsection">Mental Transit — Letter ${p.mental_transit || '?'}</div>
+  ${prose(d.transits?.mental)}
+  <div class="subsection">Spiritual Transit — Letter ${p.spiritual_transit || '?'}</div>
+  ${prose(d.transits?.spiritual)}
+  <div class="subsection">Essence Number ${p.essence_number || '?'}</div>
+  ${prose(d.transits?.essence)}
+  <div class="subsection">This Period in Full</div>
+  ${prose(d.transits?.period_synthesis)}
+${closeSectionDiv()}
+
+<!-- ════════════════════════════════════════════════════════
+     SECTION 15 — BRIDGE NUMBERS
+════════════════════════════════════════════════════════ -->
+${sectionHeader('15', `Bridge Numbers — Closing the Gaps`)}
+  <div class="insight avoid-break">
+    <div class="insight-title">Your Bridge Numbers</div>
+    <p>
+      <strong>Soul–Expression Bridge: ${p.soul_expression_bridge ?? '—'}</strong> — gap between Soul Urge ${p.soul_urge_number} and Name ${p.name_number} &nbsp;·&nbsp;
+      <strong>Life–Personality Bridge: ${p.life_personality_bridge ?? '—'}</strong> — gap between Destiny ${p.destiny_number} and Personality ${p.personality_number}
+    </p>
+    <p>
+      <strong>Rational Thought Number: ${p.rational_thought_number ?? '—'}</strong> — how you think and process &nbsp;·&nbsp;
+      <strong>Balance Number: ${p.balance_number ?? '—'}</strong> — how you restore equilibrium under stress
+    </p>
+  </div>
+  <div class="subsection">Soul–Expression Bridge</div>
+  ${prose(d.bridge_numbers?.soul_expression)}
+  <div class="subsection">Life–Personality Bridge</div>
+  ${prose(d.bridge_numbers?.life_personality)}
+  <div class="subsection">How to Begin Closing These Gaps</div>
+  ${prose(d.bridge_numbers?.how_to_close)}
+${closeSectionDiv()}
+
+<!-- ════════════════════════════════════════════════════════
+     SECTION 16 — MATURITY & POWER
+════════════════════════════════════════════════════════ -->
+${sectionHeader('16', `Maturity & Power — Who You Are Becoming`)}
+  <div class="insight avoid-break">
+    <div class="insight-title">Looking Ahead</div>
+    <p>
+      <strong>Maturity Number: ${p.maturity_number}${p.maturity_compound && p.maturity_compound !== p.maturity_number ? ` (compound ${p.maturity_compound})` : ''}</strong> — the energy emerging fully after your mid-30s &nbsp;·&nbsp;
+      <strong>Power Number: ${p.power_number}${p.power_compound && p.power_compound !== p.power_number ? ` (compound ${p.power_compound})` : ''}</strong> — your highest functioning potential
+    </p>
+  </div>
+  <div class="subsection">Maturity Number ${p.maturity_number} — Who You Are Growing Into</div>
+  ${prose(d.maturity_power?.maturity)}
+  <div class="subsection">Power Number ${p.power_number} — What You Are Capable Of</div>
+  ${prose(d.maturity_power?.power)}
+  <div class="subsection">The Arc of Becoming</div>
+  ${prose(d.maturity_power?.synthesis)}
+${closeSectionDiv()}
+
+<!-- ════════════════════════════════════════════════════════
+     SECTION 17 — CLOSING SYNTHESIS
+════════════════════════════════════════════════════════ -->
+<div class="closing">
+  <div class="closing-title">✦ A Final Word for ${firstName}</div>
+  ${prose(d.closing_synthesis, 'closing')}
+</div>
+
+<!-- ════════════════════════════════════════════════════════
+     FOOTER
+════════════════════════════════════════════════════════ -->
 <div class="footer">
-  Generated by NumeroSoul &nbsp;·&nbsp;
-  ${new Date().toLocaleDateString('en-IN', { day:'numeric', month:'long', year:'numeric' })}
+  <strong>Occult Pulse</strong> &nbsp;·&nbsp; Complete Chaldean Numerology Reading &nbsp;·&nbsp; Prepared for ${name} &nbsp;·&nbsp; ${genDate}<br>
+  This reading is for personal reflection and self-understanding. It does not constitute medical, legal, or financial advice.<br>
+  Numerology is a symbolic system of self-inquiry. All interpretations are tendencies, not fixed fates.
 </div>
+
 </body>
 </html>`;
 }
 
 // ────────────────────────────────────────────────────────────
-// Emergency fallback — minimal table if everything else fails
+// BUILD HTML FROM CARDS  (legacy shape — Claude v1.0 fallback)
+// ────────────────────────────────────────────────────────────
+function buildHTMLFromCards(dispatchResult, profile) {
+  const name = profile.name_used || profile.name || 'Client';
+  const genDate = new Date().toLocaleDateString('en-IN', { day:'numeric', month:'long', year:'numeric' });
+  const cardRows = (dispatchResult.cards || []).map(card => `
+    <div style="margin-bottom:24px;page-break-inside:avoid;">
+      <div style="background:${C.dark};color:#fff;padding:10px 16px;font-weight:bold;font-size:13pt;border-left:5px solid ${C.gold};">
+        ${card.title || `Card ${card.card_number}`}
+        ${card.subtitle ? `<span style="font-weight:normal;font-size:10pt;opacity:0.8;margin-left:12px;">${card.subtitle}</span>` : ''}
+      </div>
+      <div style="padding:16px;line-height:1.75;font-size:11pt;background:#fff;border:1px solid ${C.border};border-top:none;">
+        ${(card.body || '').split('\n\n').filter(Boolean).map(p => `<p style="margin:0 0 12px 0;">${p}</p>`).join('')}
+      </div>
+    </div>
+  `).join('');
+  return `<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8">
+<style>${sharedCSS()}</style>
+</head><body>
+<div class="cover">
+  <div class="cover-brand">✦ Occult Pulse ✦</div>
+  <div class="cover-title">Numerology Reading</div>
+  <div class="cover-subtitle">${name}</div>
+  <hr class="cover-divider"/>
+  <div style="color:rgba(255,255,255,0.6);font-size:10pt;">${profile.dob_fmt || ''} &nbsp;·&nbsp; ${genDate}</div>
+</div>
+<div class="page">${cardRows}</div>
+<div class="footer">Occult Pulse &nbsp;·&nbsp; ${genDate} &nbsp;·&nbsp; Chaldean Numerology System</div>
+</body></html>`;
+}
+
+// ────────────────────────────────────────────────────────────
+// FALLBACK HTML  (if everything else fails)
 // ────────────────────────────────────────────────────────────
 function buildFallbackHTML(profile) {
-  const name = profile.name_used || profile.name || 'Client';
+  const name    = profile.name_used || profile.name || 'Client';
+  const genDate = new Date().toLocaleDateString('en-IN', { day:'numeric', month:'long', year:'numeric' });
   return `<!DOCTYPE html>
-<html>
-<head><meta charset="UTF-8">
-<style>
-  body { font-family:'Segoe UI',sans-serif; margin:20px; color:#2c3e50; }
-  h1   { background:#2c3e50; color:#fff; padding:20px; text-align:center; }
-  table{ width:100%; border-collapse:collapse; margin:15px 0; }
-  th   { background:#34495e; color:#fff; padding:10px; text-align:left; }
-  td   { padding:10px; border-bottom:1px solid #ddd; }
-  tr:nth-child(even) td { background:#ecf0f1; }
-  .num { background:#f39c12; color:#fff; padding:2px 8px; border-radius:3px; font-weight:bold; }
-</style>
-</head>
-<body>
-<h1>✨ Numerology Reading for ${name} ✨</h1>
-<p><strong>Date of Birth:</strong> ${profile.dob_fmt || profile.dob_used || ''}</p>
-<table>
-  <tr><th>Number Type</th><th>Value</th></tr>
-  <tr><td>Psychic</td>      <td><span class="num">${profile.psychic_number || '—'}</span></td></tr>
-  <tr><td>Destiny</td>      <td><span class="num">${profile.destiny_number || '—'}</span></td></tr>
-  <tr><td>Name</td>         <td><span class="num">${profile.name_number || '—'}</span></td></tr>
-  <tr><td>Soul Urge</td>    <td><span class="num">${profile.soul_urge_number || '—'}</span></td></tr>
-  <tr><td>Personality</td>  <td><span class="num">${profile.personality_number || '—'}</span></td></tr>
-  <tr><td>Life Path</td>    <td><span class="num">${profile.life_path_number || profile.destiny_number || '—'}</span></td></tr>
-  <tr><td>Maturity</td>     <td><span class="num">${profile.maturity_number || '—'}</span></td></tr>
-  <tr><td>Power</td>        <td><span class="num">${profile.power_number || '—'}</span></td></tr>
-  <tr><td>Personal Year</td><td><span class="num">${profile.personal_year_number || '—'}</span></td></tr>
-</table>
-<p style="color:#999;font-size:12px;text-align:center;">
-  Generated by NumeroSoul · ${new Date().toLocaleDateString('en-IN', { day:'numeric', month:'long', year:'numeric' })}
-</p>
-</body>
-</html>`;
+<html><head><meta charset="UTF-8">
+<style>${sharedCSS()}</style>
+</head><body>
+<div class="cover">
+  <div class="cover-brand">✦ Occult Pulse ✦</div>
+  <div class="cover-title">Numerology Reading</div>
+  <div class="cover-subtitle">${name}</div>
+</div>
+<div class="page">
+  <table class="num-table">
+    <thead><tr><th>Number Type</th><th>Value</th></tr></thead>
+    <tbody>
+      <tr><td>Psychic</td>     <td><span class="num-badge">${profile.psychic_number || '—'}</span></td></tr>
+      <tr><td>Destiny</td>     <td><span class="num-badge">${profile.destiny_number || '—'}</span></td></tr>
+      <tr><td>Name</td>        <td><span class="num-badge">${profile.name_number || '—'}</span></td></tr>
+      <tr><td>Soul Urge</td>   <td><span class="num-badge">${profile.soul_urge_number || '—'}</span></td></tr>
+      <tr><td>Personality</td> <td><span class="num-badge">${profile.personality_number || '—'}</span></td></tr>
+      <tr><td>Life Path</td>   <td><span class="num-badge">${profile.life_path_number || profile.destiny_number || '—'}</span></td></tr>
+      <tr><td>Maturity</td>    <td><span class="num-badge">${profile.maturity_number || '—'}</span></td></tr>
+      <tr><td>Power</td>       <td><span class="num-badge">${profile.power_number || '—'}</span></td></tr>
+      <tr><td>Personal Year</td><td><span class="num-badge">${profile.personal_year_number || '—'}</span></td></tr>
+    </tbody>
+  </table>
+</div>
+<div class="footer">Occult Pulse &nbsp;·&nbsp; ${genDate} &nbsp;·&nbsp; Chaldean Numerology System</div>
+</body></html>`;
 }
 
 module.exports = { handlePaidReading };

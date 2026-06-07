@@ -1,4 +1,4 @@
-
+7th June 2026
 
 numerology-backend/
   server.js
@@ -6,7 +6,7 @@ numerology-backend/
   .env
   .gitignore
 
-  reading.settings.js
+  src/reading.settings.js
 
   src/config/db.js
   src/config/products.js
@@ -15,14 +15,10 @@ numerology-backend/
   src/engines/hardcoded.js
   src/engines/claude.js
   src/engines/openai.js
-  src/engines/docx-generator.js
 
   src/middleware/auth.js
 
   src/prompts/free_reading_v1.0
-  src/prompts/free_reading_v2.0(EMPTY)
-  src/prompts/career_1.0.js(EMPTY)
-  src/prompts/love_1.0.js (EMPTY)
   src/prompts/paid_reading_minimal_v1.0.js
 
   src/routes/admin.js

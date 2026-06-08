@@ -171,7 +171,7 @@ const C = {
 // ────────────────────────────────────────────────────────────
 function sharedCSS() {
   return `
-    * { box-sizing: border-box; margin: 0; padding: 0; }
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
     body {
       font-family: Georgia, 'Times New Roman', serif;
       font-size: 11pt;

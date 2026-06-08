@@ -475,7 +475,7 @@ function buildPaidReadingHTML(profile) {
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
 <title>Numerology Reading — ${f.name_used}</title>
 <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
     body { font-family: Georgia, 'Times New Roman', serif; font-size: 11pt; line-height: 1.75; color: #2c3e50; background: #ffffff; margin: 0; padding: 0; }
     .cover { background-color: #1a1a2e; color: #ffffff; padding: 52px 48px 44px; text-align: center; page-break-after: always; }
     .cover-brand { font-family: Georgia, serif; font-size: 11pt; letter-spacing: 0.22em; text-transform: uppercase; color: #b7860b; margin-bottom: 32px; }

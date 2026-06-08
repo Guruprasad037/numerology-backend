@@ -136,7 +136,7 @@ async function dispatch(serviceType, profile) {
     // updated similarly if/when it needs to support v2.0 prompts.
     const promptResult = buildPrompt(profile);
 
-    log(`prompt built for "${promptKey}"`, {
+    log(`prompt built for "${promptVersion}"`, {
       shape:  typeof promptResult === 'object' && promptResult.user ? 'system+user' : 'string',
       length: typeof promptResult === 'string'
         ? promptResult.length

@@ -52,7 +52,7 @@ function parseJSON(raw) {
 async function callClaudeAPI(systemPrompt, userPrompt) {
   const body = {
     model:       'claude-sonnet-4-6',
-    max_tokens:  12000,
+    max_tokens:  25000,
     temperature: 0.3,   // lower = more consistent JSON structure
     messages: [
       { role: 'user', content: userPrompt }

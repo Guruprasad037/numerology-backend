@@ -20,6 +20,8 @@ numerology-backend/
 
   src/prompts/free_reading_v1.0
   src/prompts/paid_reading_minimal_v1.0.js
+  src/prompts/paid_reading_v2.0.js
+
 
   src/routes/admin.js
   src/routes/index.js

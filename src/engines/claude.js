@@ -93,11 +93,12 @@ async function run(prompt) {
     userPreview: userPrompt?.slice(0, 300),
   });
 
-  // ── Network call with 3-attempt retry ────────────────────
+  // ── Network call with 3-attempt retry (changed to 1 attempt)────────────────────
   let response       = null;
   let lastNetworkErr = null;
 
-  for (let attempt = 1; attempt <= 3; attempt++) {
+  //for (let attempt = 1; attempt <= 3; attempt++) {
+  for (let attempt = 1; attempt <= 1; attempt++) {
     try {
       response       = await callClaudeAPI(systemPrompt, userPrompt);
       lastNetworkErr = null;

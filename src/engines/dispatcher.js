@@ -50,8 +50,7 @@ function loadEngine(name) {
 // Loads the prompt builder function from src/prompts/.
 // File name convention: {service}_{version}.js
 // e.g. paid_reading_v2.0.js, free_reading_v1.0.js
-function loadPrompt(service, version) {
-  const promptFile = `${service}_${version}.js`;
+function loadPrompt(promptFile) {
   log(`loadPrompt: "${promptFile}"`);
   return require(path.join(__dirname, '../prompts', promptFile));
 }
@@ -126,8 +125,7 @@ async function dispatch(serviceType, profile) {
 
     // For paid readings the prompt file is keyed as 'paid_reading',
     // not the product slug — keeps prompt files generic.
-    const promptKey   = isFree ? serviceType : 'paid_reading';
-    const buildPrompt = loadPrompt(promptKey, promptVersion);
+      const buildPrompt = loadPrompt(promptVersion);
 
     // buildPrompt() returns either:
     //   - a plain string (legacy / free reading / minimal prompts)

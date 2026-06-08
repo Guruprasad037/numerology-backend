@@ -103,7 +103,8 @@ async function resolveSettings(serviceType) {
     // Lazy-require db to avoid circular dependency during module init.
     // On first call this loads the module; on subsequent calls Node
     // returns the cached module — no performance cost.
-    const { dbGet } = require('./src/config/db');
+    
+    const { dbGet } = require('./config/db');
 
     const row = await dbGet(
       `SELECT value FROM settings WHERE key = $1`,

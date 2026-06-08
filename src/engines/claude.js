@@ -82,7 +82,7 @@ function parseJSON(raw) {
 // ─────────────────────────────────────────────────────────────
 async function callClaudeAPI(systemPrompt, userPrompt) {
   const body = {
-    model:       'claude-sonnet-4-20250514',
+    model:       'claude-sonnet-4-6',
     max_tokens:  25000,
     temperature: 0.3,
     stream:      true,  // enables streaming — KEY CHANGE from v3
@@ -186,7 +186,7 @@ async function run(prompt) {
   log(1, 'run() called');
   log(1.1, 'environment check', {
     hasApiKey: !!process.env.ANTHROPIC_API_KEY,
-    model:     'claude-sonnet-4-20250514',
+    model:     'claude-sonnet-4-6',
   });
 
   // ── Resolve system and user strings ──────────────────────
@@ -213,7 +213,7 @@ async function run(prompt) {
   }
 
   log(2, 'Sending streaming request to Claude API', {
-    model:       'claude-sonnet-4-20250514',
+    model:       'claude-sonnet-4-6',
     hasSystem:   !!systemPrompt,
     userPreview: userPrompt?.slice(0, 300),
   });

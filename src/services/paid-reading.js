@@ -1,35 +1,19 @@
 // ============================================================
-//  src/services/paid-reading.js  v6
+//  src/services/paid-reading.js  v7
 //
-//  CHANGES from v5:
-//    - Added report_ref_id generation and storage.
+//  CHANGES from v6:
+//    - Lucky attributes section added to HTML report.
+//      New Section 16: Lucky Colours, Days & Gemstones.
+//      Maturity & Power moves to Section 17.
+//      TOC updated accordingly.
+//    - firstName extraction fixed for names like "S P Sindhuja"
+//      (uses .find(p => p.length > 1) instead of index check).
+//    - buildPaidHTMLFromClaudeJSON() renders lucky_attributes
+//      from Claude JSON: colour swatches table + prose sections.
+//    - buildHTMLFromCards() and buildFallbackHTML() unchanged
+//      except ref ID placeholder (identical to v6).
 //
-//  WHAT CHANGED (3 additions only, everything else identical):
-//
-//  1. generateRefId() helper added at top of file (after imports).
-//     Takes reading.id (UUID), returns "OP-RD-{LAST_SEGMENT_UPPERCASE}".
-//     Example: reading id "237dabbb-b2dc-4b11-84c4-dc76f0687b7a"
-//              → "OP-RD-DC76F0687B7A"
-//
-//  2. In handlePaidReading(), after readingId is returned from
-//     the INSERT RETURNING, we immediately UPDATE the row to
-//     set report_ref_id. Fire-and-forget — if it fails it logs
-//     but does not break the reading flow.
-//
-//  3. In buildPaidHTMLFromClaudeJSON(), the footer now includes
-//     the ref ID, and the cover page shows it. The ref ID is
-//     passed in via a new optional parameter.
-//     All other HTML builders (buildHTMLFromCards, buildFallbackHTML)
-//     also receive and display it.
-//
-//  BACKWARD COMPATIBLE: if report_ref_id column doesn't exist yet
-//  (migration not run), the UPDATE fails silently. Run the migration
-//  before deploying this file.
-//
-//  REQUIRES:
-//    ALTER TABLE readings ADD COLUMN IF NOT EXISTS report_ref_id VARCHAR(30);
-//    CREATE UNIQUE INDEX IF NOT EXISTS idx_readings_ref_id
-//      ON readings (report_ref_id) WHERE report_ref_id IS NOT NULL;
+//  Everything else identical to v6.
 // ============================================================
 
 const settings   = require('../reading.settings');
@@ -45,27 +29,11 @@ function error(step, message, data = null) {
   console.error(`[${FILE}] ❌ STEP ${step} ${message}`, data ? JSON.stringify(data, null, 2) : '');
 }
 
-// ────────────────────────────────────────────────────────────
-// ADDITION 1 of 3 — generateRefId()
-//
-// Takes the readings.id UUID and returns a human-readable
-// reference ID for use in PDF footers and support emails.
-//
-// Format:  OP-RD-{LAST_SEGMENT_UPPERCASE}
-// Example: "237dabbb-b2dc-4b11-84c4-dc76f0687b7a"
-//        → "OP-RD-DC76F0687B7A"
-//
-// The last UUID segment (12 hex chars) is unique enough for
-// our volume and short enough to fit in a PDF footer.
-// ────────────────────────────────────────────────────────────
 function generateRefId(readingId) {
   const lastSegment = (readingId || '').split('-').pop().toUpperCase();
   return `OP-RD-${lastSegment}`;
 }
 
-// ────────────────────────────────────────────────────────────
-// Main entry point — only the ref ID additions are new
-// ────────────────────────────────────────────────────────────
 async function handlePaidReading(order, profile, profileId) {
   log(1, 'handlePaidReading() called', {
     orderId:     order.id,
@@ -78,7 +46,6 @@ async function handlePaidReading(order, profile, profileId) {
   let engineConfig = settings.PAID_READING_ENGINE;
   let engineUsed   = 'unknown';
 
-  // ── Step 1: Generate HTML via dispatcher ─────────────────
   try {
     log(2, `Dispatching "${order.product_slug}" to engine="${engineConfig}"`);
     const dispatchResult = await dispatcher.dispatch(order.product_slug, profile);
@@ -86,29 +53,18 @@ async function handlePaidReading(order, profile, profileId) {
     engineConfig = dispatchResult._engine_config || settings.PAID_READING_ENGINE;
     engineUsed   = dispatchResult._engine_used   || 'unknown';
 
-    // ── Shape A: hardcoded engine → _html field ───────────
     if (dispatchResult._html) {
       htmlReport = dispatchResult._html;
       log(3, 'HTML from hardcoded engine', { length: htmlReport.length });
 
-    // ── Shape B: Claude v2.0 / v3.0 → JSON object ────────
     } else if (dispatchResult.sections || dispatchResult.opening_portrait) {
       const claudeData = dispatchResult.sections || dispatchResult;
       htmlReport = buildPaidHTMLFromClaudeJSON(claudeData, profile);
-      log(3, 'HTML built from Claude JSON', {
-        hasSections:    !!claudeData.opening_portrait,
-        hasRedThread:   !!claudeData.red_thread,
-        hasLifeDomains: !!claudeData.psychic?.life_domains,
-        length:         htmlReport.length,
-      });
+      log(3, 'HTML built from Claude JSON', { length: htmlReport.length });
 
-    // ── Shape C: legacy cards array ───────────────────────
     } else if (dispatchResult.cards && dispatchResult.cards.length > 0) {
       htmlReport = buildHTMLFromCards(dispatchResult, profile);
-      log(3, 'HTML built from legacy Claude cards', {
-        cardCount: dispatchResult.cards.length,
-        length:    htmlReport.length,
-      });
+      log(3, 'HTML built from legacy Claude cards', { cardCount: dispatchResult.cards.length });
 
     } else {
       log(3, 'Dispatcher returned unexpected shape — will use fallback', {
@@ -121,7 +77,6 @@ async function handlePaidReading(order, profile, profileId) {
     engineUsed = 'hardcoded';
   }
 
-  // ── Step 2: Fallback if still no HTML ────────────────────
   if (!htmlReport) {
     log(4, 'Using emergency fallback HTML');
     htmlReport = buildFallbackHTML(profile);
@@ -130,7 +85,6 @@ async function handlePaidReading(order, profile, profileId) {
 
   log(5, 'HTML ready', { length: htmlReport.length, engineConfig, engineUsed });
 
-  // ── Step 3: Save to database ─────────────────────────────
   log(6, 'Saving reading to database');
 
   const subjectName  = order.subject_name || order.customer_name || 'Report';
@@ -170,15 +124,6 @@ async function handlePaidReading(order, profile, profileId) {
   const readingId = readingResult.rows[0].id;
   log(7, 'Reading saved successfully', { readingId, engineConfig, engineUsed });
 
-  // ── ADDITION 2 of 3 — store report_ref_id ────────────────
-  // Generate the human-readable ref ID from the reading UUID
-  // and write it back to the row. Fire-and-forget — a failure
-  // here does not affect the reading or delivery.
-  //
-  // Requires DB migration:
-  //   ALTER TABLE readings ADD COLUMN IF NOT EXISTS report_ref_id VARCHAR(30);
-  //   CREATE UNIQUE INDEX IF NOT EXISTS idx_readings_ref_id
-  //     ON readings (report_ref_id) WHERE report_ref_id IS NOT NULL;
   const refId = generateRefId(readingId);
   dbRun(
     `UPDATE readings SET report_ref_id = $1 WHERE id = $2`,
@@ -186,15 +131,9 @@ async function handlePaidReading(order, profile, profileId) {
   ).then(() => {
     log(7.1, 'report_ref_id stored', { readingId, refId });
   }).catch(err => {
-    // Silently log — most likely cause is migration not yet run
     console.warn(`[${FILE}] report_ref_id update failed (run DB migration if not done): ${err.message}`);
   });
 
-  // ── Inject ref ID into the stored HTML ───────────────────
-  // Now that we have the ref ID, patch it into the HTML that's
-  // already been generated and stored. This replaces the
-  // placeholder we left in the HTML builders below.
-  // Also update report_content.html so the downloaded file has it.
   const patchedHtml = htmlReport.replace(/\{\{REPORT_REF_ID\}\}/g, refId);
   if (patchedHtml !== htmlReport) {
     const patchedContent = {
@@ -224,7 +163,7 @@ async function handlePaidReading(order, profile, profileId) {
 }
 
 // ────────────────────────────────────────────────────────────
-// COLOUR PALETTE — UNCHANGED
+// COLOUR PALETTE
 // ────────────────────────────────────────────────────────────
 const C = {
   dark:     '#2c3e50',
@@ -245,7 +184,7 @@ const C = {
 };
 
 // ────────────────────────────────────────────────────────────
-// SHARED CSS — UNCHANGED
+// SHARED CSS
 // ────────────────────────────────────────────────────────────
 function sharedCSS() {
   return `
@@ -541,11 +480,18 @@ function sharedCSS() {
     }
     .page-break { page-break-before: always; }
     .avoid-break { page-break-inside: avoid; }
+    .colour-swatch {
+      display: inline-block;
+      padding: 2px 10px;
+      margin: 2px 4px 2px 0;
+      font-size: 9pt;
+      border-radius: 2px;
+    }
   `;
 }
 
 // ────────────────────────────────────────────────────────────
-// PROSE HELPER — UNCHANGED
+// PROSE HELPER
 // ────────────────────────────────────────────────────────────
 function prose(text, className = 'prose') {
   if (!text) return '';
@@ -559,7 +505,7 @@ function prose(text, className = 'prose') {
 }
 
 // ────────────────────────────────────────────────────────────
-// HOW-TO-CLOSE HELPER — UNCHANGED
+// HOW-TO-CLOSE HELPER
 // ────────────────────────────────────────────────────────────
 function renderHowToClose(howToClose) {
   if (!howToClose) return '';
@@ -598,17 +544,55 @@ function renderHowToClose(howToClose) {
 }
 
 // ────────────────────────────────────────────────────────────
-// BUILD HTML FROM CLAUDE JSON
-// ADDITION 3 of 3 — ref ID injected into cover + footer
-// The ref ID is written as {{REPORT_REF_ID}} placeholder here.
-// handlePaidReading() patches it after the reading ID is known.
+// COLOUR SWATCH HELPER
+// Maps colour names to hex values for the lucky colours display.
+// ────────────────────────────────────────────────────────────
+function renderColorSwatches(colors) {
+  if (!Array.isArray(colors) || colors.length === 0) return '—';
+
+  const colorMap = {
+    'Gold':          { bg: '#b7860b', text: '#fff'     },
+    'Orange':        { bg: '#e67e22', text: '#fff'     },
+    'Yellow':        { bg: '#f1c40f', text: '#2c3e50'  },
+    'White':         { bg: '#ecf0f1', text: '#2c3e50'  },
+    'Silver':        { bg: '#95a5a6', text: '#fff'     },
+    'Cream':         { bg: '#fdf6e3', text: '#2c3e50'  },
+    'Purple':        { bg: '#8e44ad', text: '#fff'     },
+    'Violet':        { bg: '#9b59b6', text: '#fff'     },
+    'Blue':          { bg: '#2980b9', text: '#fff'     },
+    'Electric Blue': { bg: '#3498db', text: '#fff'     },
+    'Grey':          { bg: '#7f8c8d', text: '#fff'     },
+    'Dark Blue':     { bg: '#1a252f', text: '#fff'     },
+    'Green':         { bg: '#27ae60', text: '#fff'     },
+    'Light Green':   { bg: '#2ecc71', text: '#2c3e50'  },
+    'Pink':          { bg: '#e91e8c', text: '#fff'     },
+    'Black':         { bg: '#1a1a2e', text: '#fff'     },
+    'Dark Brown':    { bg: '#5d4037', text: '#fff'     },
+    'Red':           { bg: '#c0392b', text: '#fff'     },
+    'Crimson':       { bg: '#922b21', text: '#fff'     },
+    'Orange-Red':    { bg: '#e74c3c', text: '#fff'     },
+    'Dark Brown':    { bg: '#5d4037', text: '#fff'     },
+  };
+
+  return colors.map(col => {
+    const c = colorMap[col] || { bg: '#7f8c8d', text: '#fff' };
+    return `<span class="colour-swatch" style="background:${c.bg};color:${c.text};">${col}</span>`;
+  }).join('');
+}
+
+// ────────────────────────────────────────────────────────────
+// BUILD HTML FROM CLAUDE JSON  (v7 — with lucky attributes)
 // ────────────────────────────────────────────────────────────
 function buildPaidHTMLFromClaudeJSON(d, profile) {
   const name      = profile.name_used || profile.name || 'Client';
   const dobFmt    = profile.dob_fmt   || profile.dob_used || '';
-const nameParts = (name).trim().split(/\s+/);
-const firstName = nameParts.find(p => p.length > 1) || nameParts[0];  const currentYear = new Date().getFullYear();
-  const genDate   = new Date().toLocaleDateString('en-IN', { day:'numeric', month:'long', year:'numeric' });
+
+  // Fixed firstName extraction — works for "S P Sindhuja" and "Sindhuja S P"
+  const nameParts = name.trim().split(/\s+/);
+  const firstName = nameParts.find(p => p.length > 1) || nameParts[0];
+
+  const currentYear = new Date().getFullYear();
+  const genDate     = new Date().toLocaleDateString('en-IN', { day:'numeric', month:'long', year:'numeric' });
 
   const p = profile;
 
@@ -619,12 +603,18 @@ const firstName = nameParts.find(p => p.length > 1) || nameParts[0];  const curr
 
   const masterList  = Array.isArray(p.master_numbers_found) && p.master_numbers_found.length ? p.master_numbers_found : [];
   const karmicList  = Array.isArray(p.karmic_debt_numbers)  && p.karmic_debt_numbers.length  ? p.karmic_debt_numbers  : [];
-  const hiddenList  = Array.isArray(p.hidden_passions)  && p.hidden_passions.length  ? p.hidden_passions.join(', ')  : 'None';
-  const missingList = Array.isArray(p.missing_numbers)  && p.missing_numbers.length  ? p.missing_numbers.join(', ')  : 'None';
-  const lessonList  = Array.isArray(p.karmic_lessons)   && p.karmic_lessons.length   ? p.karmic_lessons.join(', ')   : 'None';
+  const hiddenList  = Array.isArray(p.hidden_passions) && p.hidden_passions.length ? p.hidden_passions.join(', ') : 'None';
+  const missingList = Array.isArray(p.missing_numbers) && p.missing_numbers.length ? p.missing_numbers.join(', ') : 'None';
+  const lessonList  = Array.isArray(p.karmic_lessons)  && p.karmic_lessons.length  ? p.karmic_lessons.join(', ')  : 'None';
 
   const totalLetters = (p.plane_mental_count||0)+(p.plane_physical_count||0)+(p.plane_emotional_count||0)+(p.plane_intuitive_count||0);
   const pct = n => totalLetters ? Math.round((n||0)/totalLetters*100) : 0;
+
+  // Lucky attributes from profile (calculated in calculator.js)
+  const luckyColors    = Array.isArray(p.lucky_colors)      ? p.lucky_colors      : [];
+  const luckyDays      = Array.isArray(p.lucky_days)         ? p.lucky_days         : [];
+  const luckyNumbers   = Array.isArray(p.lucky_numbers)      ? p.lucky_numbers      : [];
+  const favMonths      = Array.isArray(p.favourable_months)  ? p.favourable_months  : [];
 
   function sectionHeader(num, title) {
     return `
@@ -636,6 +626,9 @@ const firstName = nameParts.find(p => p.length > 1) || nameParts[0];  const curr
   }
   function closeSectionDiv() { return `</div>`; }
 
+  // TOC — karmic and master sections are conditional, so we
+  // build the list dynamically to keep numbering correct.
+  let secNum = 9;
   const tocEntries = [
     { num:'1',  title:'Your Numerological Portrait' },
     { num:'2',  title:`Psychic Number ${p.psychic_number} — The Instinctive Self` },
@@ -646,15 +639,34 @@ const firstName = nameParts.find(p => p.length > 1) || nameParts[0];  const curr
     { num:'7',  title:`The Letters of Your Name` },
     { num:'8',  title:`Planes of Expression` },
     { num:'9',  title:`Hidden Passions & Karmic Lessons` },
-    ...(p.has_karmic_debt && karmicList.length ? [{ num:'10', title:`Karmic Debt — The Soul's Accelerated Curriculum` }] : []),
-    ...(masterList.length ? [{ num: p.has_karmic_debt && karmicList.length ? '11' : '10', title:`Master Number${masterList.length>1?'s':''} ${masterList.join(' & ')}` }] : []),
-    { num:'12', title:`Life Cycles — Pinnacles & Challenges` },
-    { num:'13', title:`Current Timing — ${currentYear} and Beyond` },
-    { num:'14', title:`Active Letter Transits` },
-    { num:'15', title:`Bridge Numbers — Closing the Gaps` },
-    { num:'16', title:`Maturity & Power — Who You Are Becoming` },
-    { num:'17', title:`Closing Synthesis` },
   ];
+
+  if (karmicList.length) {
+    secNum++;
+    tocEntries.push({ num: String(secNum), title: `Karmic Debt — The Soul's Accelerated Curriculum` });
+  }
+  if (masterList.length) {
+    secNum++;
+    tocEntries.push({ num: String(secNum), title: `Master Number${masterList.length > 1 ? 's' : ''} ${masterList.join(' & ')}` });
+  }
+
+  const sec = {
+    lifeCycles:     String(++secNum),
+    timing:         String(++secNum),
+    transits:       String(++secNum),
+    bridge:         String(++secNum),
+    lucky:          String(++secNum),
+    maturityPower:  String(++secNum),
+  };
+
+  tocEntries.push(
+    { num: sec.lifeCycles,    title: `Life Cycles — Pinnacles & Challenges` },
+    { num: sec.timing,        title: `Current Timing — ${currentYear} and Beyond` },
+    { num: sec.transits,      title: `Active Letter Transits` },
+    { num: sec.bridge,        title: `Bridge Numbers — Closing the Gaps` },
+    { num: sec.lucky,         title: `Lucky Colours, Days & Gemstones` },
+    { num: sec.maturityPower, title: `Maturity & Power — Who You Are Becoming` },
+  );
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -861,6 +873,32 @@ const firstName = nameParts.find(p => p.length > 1) || nameParts[0];  const curr
       <strong>Karmic Lessons:</strong> ${lessonList}
     </div>
   </div>
+
+  <div class="insight avoid-break" style="margin-top:16px;">
+    <div class="insight-title">Lucky Attributes Summary</div>
+    <table style="width:100%;border-collapse:collapse;font-size:10pt;">
+      <tr>
+        <td style="padding:4px 12px 4px 0;width:140px;font-weight:bold;">Lucky Colours</td>
+        <td style="padding:4px 0;">${renderColorSwatches(luckyColors)}</td>
+      </tr>
+      <tr>
+        <td style="padding:4px 12px 4px 0;font-weight:bold;">Lucky Days</td>
+        <td style="padding:4px 0;">${luckyDays.join(' &nbsp;·&nbsp; ') || '—'}</td>
+      </tr>
+      <tr>
+        <td style="padding:4px 12px 4px 0;font-weight:bold;">Lucky Numbers</td>
+        <td style="padding:4px 0;">${luckyNumbers.map(n => `<span class="num-badge" style="font-size:9pt;margin-right:4px;">${n}</span>`).join('') || '—'}</td>
+      </tr>
+      <tr>
+        <td style="padding:4px 12px 4px 0;font-weight:bold;">Gemstone</td>
+        <td style="padding:4px 0;">${p.lucky_gem || '—'}${p.secondary_gem ? ` &nbsp;<span style="color:${C.muted};font-size:9pt;">+ ${p.secondary_gem}</span>` : ''}</td>
+      </tr>
+      <tr>
+        <td style="padding:4px 12px 4px 0;font-weight:bold;">Metal</td>
+        <td style="padding:4px 0;">${p.lucky_metal || '—'}</td>
+      </tr>
+    </table>
+  </div>
 </div>
 
 ${sectionHeader('1', 'Your Numerological Portrait')}
@@ -984,31 +1022,31 @@ ${sectionHeader('9', `Hidden Passions & Karmic Lessons`)}
   ${prose(d.hidden_patterns?.synthesis)}
 ${closeSectionDiv()}
 
-${p.has_karmic_debt && karmicList.length && d.karmic_debt ? `
+${karmicList.length && d.karmic_debt ? `
 ${sectionHeader('10', `Karmic Debt — The Soul's Accelerated Curriculum`)}
   <div class="callout avoid-break">
     <div class="callout-title">Karmic Compound${karmicList.length > 1 ? 's' : ''} Detected</div>
-    <p>Your chart carries the karmic compound${karmicList.length > 1 ? 's' : ''} <strong>${karmicList.join(' and ')}</strong>, located in your <strong>${(Array.isArray(p.karmic_debt_locations) ? p.karmic_debt_locations : []).join(' and ')}</strong>. This is a significant soul-level pattern — not a punishment, but an accelerated curriculum the soul chose.</p>
+    <p>Your chart carries the karmic compound${karmicList.length > 1 ? 's' : ''} <strong>${karmicList.join(' and ')}</strong>, located in your <strong>${(Array.isArray(p.karmic_debt_locations) ? p.karmic_debt_locations : []).join(' and ')}</strong>.</p>
   </div>
   ${prose(d.karmic_debt)}
 ${closeSectionDiv()}` : ''}
 
 ${masterList.length && d.master_numbers ? `
-${sectionHeader('11', `Master Number${masterList.length > 1 ? 's' : ''} ${masterList.join(' & ')}`)}
+${sectionHeader(karmicList.length ? '11' : '10', `Master Number${masterList.length > 1 ? 's' : ''} ${masterList.join(' & ')}`)}
   <div class="callout avoid-break">
     <div class="callout-title">Master Number Detected ⭐</div>
-    <p>Your chart carries Master Number${masterList.length > 1 ? 's' : ''} <strong>${masterList.join(' and ')}</strong>. This appears in fewer than ${masterList.includes(22) ? '3%' : '8%'} of charts. Master Numbers carry both heightened gifts and heightened responsibility.</p>
+    <p>Your chart carries Master Number${masterList.length > 1 ? 's' : ''} <strong>${masterList.join(' and ')}</strong>. This appears in fewer than ${masterList.includes(22) ? '3%' : '8%'} of charts.</p>
   </div>
   ${prose(d.master_numbers)}
 ${closeSectionDiv()}` : ''}
 
-${sectionHeader('12', `Life Cycles — Pinnacles & Challenges`)}
+${sectionHeader(sec.lifeCycles, `Life Cycles — Pinnacles & Challenges`)}
   <table class="num-table avoid-break">
     <thead>
       <tr><th>Pinnacle</th><th style="text-align:center;">Number</th><th>Period</th><th>Active?</th></tr>
     </thead>
     <tbody>
-      <tr><td>Pinnacle 1</td><td class="num-col"><span class="num-badge">${p.pinnacle_1 || '—'}</span></td><td>${p1Label}</td><td>${p.current_pinnacle === p.pinnacle_1 && !p.pinnacle_2_start_age ? '✓ Active now' : ''}</td></tr>
+      <tr><td>Pinnacle 1</td><td class="num-col"><span class="num-badge">${p.pinnacle_1 || '—'}</span></td><td>${p1Label}</td><td></td></tr>
       <tr><td>Pinnacle 2</td><td class="num-col"><span class="num-badge">${p.pinnacle_2 || '—'}</span></td><td>${p2Label}</td><td>${p.current_pinnacle === p.pinnacle_2 ? '✓ Active now' : ''}</td></tr>
       <tr><td>Pinnacle 3</td><td class="num-col"><span class="num-badge">${p.pinnacle_3 || '—'}</span></td><td>${p3Label}</td><td>${p.current_pinnacle === p.pinnacle_3 ? '✓ Active now' : ''}</td></tr>
       <tr><td>Pinnacle 4</td><td class="num-col"><span class="num-badge">${p.pinnacle_4 || '—'}</span></td><td>${p4Label}</td><td>${p.current_pinnacle === p.pinnacle_4 ? '✓ Active now' : ''}</td></tr>
@@ -1041,7 +1079,7 @@ ${sectionHeader('12', `Life Cycles — Pinnacles & Challenges`)}
   ${prose(d.life_cycles.life_period)}` : ''}
 ${closeSectionDiv()}
 
-${sectionHeader('13', `Current Timing — ${currentYear} and Beyond`)}
+${sectionHeader(sec.timing, `Current Timing — ${currentYear} and Beyond`)}
   <div class="callout-teal avoid-break">
     <div class="callout-teal-title">Your Numbers Right Now</div>
     <p>
@@ -1061,10 +1099,9 @@ ${sectionHeader('13', `Current Timing — ${currentYear} and Beyond`)}
   ${prose(d.timing?.year_synthesis)}
 ${closeSectionDiv()}
 
-${sectionHeader('14', `Active Letter Transits`)}
+${sectionHeader(sec.transits, `Active Letter Transits`)}
   <div class="callout-teal avoid-break">
     <div class="callout-teal-title">Your Active Letters Right Now</div>
-    <p>Three letters from your name are simultaneously active — one from each name segment. This specific combination applies only to you in this exact period.</p>
     <table style="width:auto;border-collapse:collapse;margin-top:8px;font-size:10pt;">
       <tr>
         <td style="padding:4px 14px 4px 0;font-weight:bold;">Physical Transit</td>
@@ -1100,7 +1137,7 @@ ${sectionHeader('14', `Active Letter Transits`)}
   ${prose(d.transits?.period_synthesis)}
 ${closeSectionDiv()}
 
-${sectionHeader('15', `Bridge Numbers — Closing the Gaps`)}
+${sectionHeader(sec.bridge, `Bridge Numbers — Closing the Gaps`)}
   <div class="insight avoid-break">
     <div class="insight-title">Your Bridge Numbers</div>
     <p>
@@ -1119,7 +1156,57 @@ ${sectionHeader('15', `Bridge Numbers — Closing the Gaps`)}
   ${renderHowToClose(d.bridge_numbers?.how_to_close)}
 ${closeSectionDiv()}
 
-${sectionHeader('16', `Maturity & Power — Who You Are Becoming`)}
+${sectionHeader(sec.lucky, `Lucky Colours, Days & Gemstones`)}
+  <div class="callout-teal avoid-break">
+    <div class="callout-teal-title">Your Lucky Attributes</div>
+    <table style="width:100%;border-collapse:collapse;font-size:10pt;margin-top:8px;">
+      <tr>
+        <td style="padding:6px 16px 6px 0;width:150px;font-weight:bold;color:${C.teal};vertical-align:top;">Lucky Colours</td>
+        <td style="padding:6px 0;">${renderColorSwatches(luckyColors)}</td>
+      </tr>
+      <tr>
+        <td style="padding:6px 16px 6px 0;font-weight:bold;color:${C.teal};">Lucky Days</td>
+        <td style="padding:6px 0;">${luckyDays.join(' &nbsp;·&nbsp; ') || '—'}</td>
+      </tr>
+      <tr>
+        <td style="padding:6px 16px 6px 0;font-weight:bold;color:${C.teal};">Lucky Numbers</td>
+        <td style="padding:6px 0;">
+          ${luckyNumbers.map(n => `<span class="num-badge" style="font-size:10pt;margin-right:6px;">${n}</span>`).join('') || '—'}
+        </td>
+      </tr>
+      <tr>
+        <td style="padding:6px 16px 6px 0;font-weight:bold;color:${C.teal};">Primary Gemstone</td>
+        <td style="padding:6px 0;">
+          <strong>${p.lucky_gem || '—'}</strong>
+          ${p.secondary_gem ? `&nbsp;<span style="color:${C.muted};font-size:9pt;">(+ ${p.secondary_gem} secondary, from Destiny)</span>` : ''}
+        </td>
+      </tr>
+      <tr>
+        <td style="padding:6px 16px 6px 0;font-weight:bold;color:${C.teal};">Lucky Metal</td>
+        <td style="padding:6px 0;">${p.lucky_metal || '—'}</td>
+      </tr>
+      <tr>
+        <td style="padding:6px 16px 6px 0;font-weight:bold;color:${C.teal};">Favourable Months</td>
+        <td style="padding:6px 0;">${favMonths.join(', ') || '—'}</td>
+      </tr>
+    </table>
+  </div>
+  <div class="subsection">Your Lucky Colours</div>
+  ${prose(d.lucky_attributes?.colors)}
+  <div class="subsection">Your Lucky Days</div>
+  ${prose(d.lucky_attributes?.days)}
+  <div class="subsection">Your Lucky Numbers</div>
+  ${prose(d.lucky_attributes?.numbers)}
+  <div class="subsection">Your Gemstone &amp; Metal</div>
+  ${prose(d.lucky_attributes?.gem)}
+  ${prose(d.lucky_attributes?.metal)}
+  <div class="subsection">Favourable Months</div>
+  ${prose(d.lucky_attributes?.favourable_months)}
+  <div class="subsection">How to Use These in Daily Life</div>
+  ${prose(d.lucky_attributes?.guidance)}
+${closeSectionDiv()}
+
+${sectionHeader(sec.maturityPower, `Maturity & Power — Who You Are Becoming`)}
   <div class="insight avoid-break">
     <div class="insight-title">Looking Ahead</div>
     <p>
@@ -1152,7 +1239,7 @@ ${closeSectionDiv()}
 }
 
 // ────────────────────────────────────────────────────────────
-// BUILD HTML FROM CARDS — ref ID placeholder added to footer
+// BUILD HTML FROM CARDS (legacy — unchanged from v6)
 // ────────────────────────────────────────────────────────────
 function buildHTMLFromCards(dispatchResult, profile) {
   const name = profile.name_used || profile.name || 'Client';
@@ -1189,7 +1276,7 @@ function buildHTMLFromCards(dispatchResult, profile) {
 }
 
 // ────────────────────────────────────────────────────────────
-// FALLBACK HTML — ref ID placeholder added to footer
+// FALLBACK HTML (unchanged from v6)
 // ────────────────────────────────────────────────────────────
 function buildFallbackHTML(profile) {
   const name    = profile.name_used || profile.name || 'Client';

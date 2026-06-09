@@ -18,6 +18,7 @@
 //    - Rational thought, balance number
 //    - Transits (physical/mental/spiritual) + essence
 //    - Ruling planet, PD combination
+//    - Lucky attributes (colours, days, numbers, gem, metal, months)
 //
 //  All functions are pure: no side-effects, no DB calls.
 //  Compound numbers always stored alongside reduced numbers.
@@ -52,9 +53,6 @@ const RULING_PLANETS = {
 };
 
 // Planes of expression — which plane each Chaldean value belongs to
-// Mental: 1,2,3   Physical: 4,5,6   Emotional: 2,3,6   Intuitive: 7,8
-// (Note: some letters are dual-plane in some traditions.
-//  Using the most widely accepted Chaldean assignment below.)
 const PLANE_MAP = {
   1:'mental', 2:'mental', 3:'mental',
   4:'physical', 5:'physical', 6:'physical',
@@ -64,8 +62,6 @@ const PLANE_MAP = {
 
 // ── Core reducers ─────────────────────────────────────────────
 
-// Reduces any integer to single digit 1–9.
-// Does NOT stop at master numbers. Use for final single-digit results.
 function reduceToSingle(n) {
   n = Math.abs(n);
   while (n > 9) {
@@ -74,8 +70,6 @@ function reduceToSingle(n) {
   return n;
 }
 
-// Reduces but STOPS at 11, 22, or 33 (master numbers).
-// Use this for all core numerology numbers.
 function reducePreserveMaster(n) {
   n = Math.abs(n);
   while (n > 9 && !MASTER_NUMBERS.has(n)) {
@@ -84,8 +78,6 @@ function reducePreserveMaster(n) {
   return n;
 }
 
-// Reduces but also stops at karmic debt numbers (13, 14, 16, 19).
-// Use when calculating life path, name, pinnacles, challenges.
 function reducePreserveMasterAndKarmic(n) {
   n = Math.abs(n);
   if (KARMIC_DEBT_NUMBERS.has(n)) return n;
@@ -96,17 +88,14 @@ function reducePreserveMasterAndKarmic(n) {
   return n;
 }
 
-// Internal: extract A-Z letters from name
 function nameToLetters(name) {
   return name.toUpperCase().split('').filter(ch => /[A-Z]/.test(ch));
 }
 
-// Internal: get Chaldean value for a single uppercase letter
 function letterValue(ch) {
   return LETTER_VALUES[ch] || 0;
 }
 
-// Format DOB for display: "23 Jul 1991"
 function formatDob(dob) {
   const [y, m, d] = dob.split('-');
   const months = ['Jan','Feb','Mar','Apr','May','Jun',
@@ -116,9 +105,7 @@ function formatDob(dob) {
 
 
 // ═══════════════════════════════════════════════════════════════
-//  1. PSYCHIC NUMBER  (Birth Number / Driver)
-//     Day of birth only, reduced. If born on 29th:
-//     compound=29, number=2 (or 11 if 29→11 — no, 2+9=11 yes!)
+//  1. PSYCHIC NUMBER
 // ═══════════════════════════════════════════════════════════════
 function calcPsychicNumber(dob) {
   const day = parseInt(dob.split('-')[2], 10);
@@ -130,10 +117,7 @@ function calcPsychicNumber(dob) {
 
 
 // ═══════════════════════════════════════════════════════════════
-//  2. DESTINY NUMBER  (Life Path / Conductor)
-//     ALL digits of full DOB summed and reduced.
-//     e.g. 23-07-1991 → 2+3+0+7+1+9+9+1 = 32 → 5
-//     Karmic debt compounds preserved if they appear.
+//  2. DESTINY NUMBER
 // ═══════════════════════════════════════════════════════════════
 function calcDestinyNumber(dob) {
   const raw = dob
@@ -149,20 +133,14 @@ function calcDestinyNumber(dob) {
 
 // ═══════════════════════════════════════════════════════════════
 //  3. LIFE PATH NUMBER
-//     In Chaldean, calculated same way as Destiny (flat sum).
-//     Some traditions treat them as identical; stored separately
-//     for flexibility. Both compounds are stored.
 // ═══════════════════════════════════════════════════════════════
 function calcLifePathNumber(dob) {
-  // Same as destiny in Chaldean flat-sum method
   return calcDestinyNumber(dob);
 }
 
 
 // ═══════════════════════════════════════════════════════════════
 //  4. BIRTH DAY / MONTH / YEAR breakdown
-//     Each component reduced individually.
-//     Used for pinnacle and challenge calculations.
 // ═══════════════════════════════════════════════════════════════
 function calcBirthComponents(dob) {
   const [yearStr, monthStr, dayStr] = dob.split('-');
@@ -180,8 +158,7 @@ function calcBirthComponents(dob) {
 
 
 // ═══════════════════════════════════════════════════════════════
-//  5. NAME NUMBER  (Expression / Name Vibration)
-//     All letters of daily-use name in Chaldean values.
+//  5. NAME NUMBER
 // ═══════════════════════════════════════════════════════════════
 function calcNameNumber(name) {
   const compound = nameToLetters(name)
@@ -194,8 +171,7 @@ function calcNameNumber(name) {
 
 
 // ═══════════════════════════════════════════════════════════════
-//  6. SOUL URGE NUMBER  (Heart's Desire / Inner Voice)
-//     Vowels only in the name.
+//  6. SOUL URGE NUMBER
 // ═══════════════════════════════════════════════════════════════
 function calcSoulUrgeNumber(name) {
   const compound = nameToLetters(name)
@@ -209,8 +185,7 @@ function calcSoulUrgeNumber(name) {
 
 
 // ═══════════════════════════════════════════════════════════════
-//  7. PERSONALITY NUMBER  (Outer Expression / Dream Number)
-//     Consonants only in the name.
+//  7. PERSONALITY NUMBER
 // ═══════════════════════════════════════════════════════════════
 function calcPersonalityNumber(name) {
   const compound = nameToLetters(name)
@@ -225,8 +200,6 @@ function calcPersonalityNumber(name) {
 
 // ═══════════════════════════════════════════════════════════════
 //  8. MATURITY NUMBER
-//     Psychic + Destiny, reduced. Energy prominent after age 35.
-//     Stored with compound.
 // ═══════════════════════════════════════════════════════════════
 function calcMaturityNumber(psychicNumber, destinyNumber) {
   const p = reduceToSingle(psychicNumber);
@@ -241,8 +214,6 @@ function calcMaturityNumber(psychicNumber, destinyNumber) {
 
 // ═══════════════════════════════════════════════════════════════
 //  9. POWER NUMBER
-//     Name Number + Destiny Number, reduced.
-//     Combined potential of name vibration and life direction.
 // ═══════════════════════════════════════════════════════════════
 function calcPowerNumber(nameNumber, destinyNumber) {
   const n = reduceToSingle(nameNumber);
@@ -257,10 +228,6 @@ function calcPowerNumber(nameNumber, destinyNumber) {
 
 // ═══════════════════════════════════════════════════════════════
 //  10. PERSONAL YEAR / MONTH / DAY NUMBERS
-//      Govern energy cycles for the current period.
-//      Personal Year:  birth day + birth month + current year
-//      Personal Month: personal year + current calendar month
-//      Personal Day:   personal month + current calendar day
 // ═══════════════════════════════════════════════════════════════
 function calcPersonalCycles(dob, referenceDate = new Date()) {
   const [, monthStr, dayStr] = dob.split('-');
@@ -290,8 +257,6 @@ function calcPersonalCycles(dob, referenceDate = new Date()) {
 
 // ═══════════════════════════════════════════════════════════════
 //  11. UNIVERSAL YEAR / MONTH NUMBERS
-//      Universal Year:  digits of current calendar year summed
-//      Universal Month: universal year + current calendar month
 // ═══════════════════════════════════════════════════════════════
 function calcUniversalCycles(referenceDate = new Date()) {
   const curYear  = referenceDate.getFullYear();
@@ -311,27 +276,6 @@ function calcUniversalCycles(referenceDate = new Date()) {
 
 // ═══════════════════════════════════════════════════════════════
 //  12. PINNACLES & CHALLENGES
-//
-//  4 Pinnacle numbers represent life's peak themes.
-//  4 Challenge numbers represent life's key lessons.
-//
-//  Pinnacle end ages are based on life path number:
-//    Pinnacle 1 ends at: 36 - life_path_number
-//    Pinnacle 2 ends at: pinnacle_1_end + 9
-//    Pinnacle 3 ends at: pinnacle_2_end + 9
-//    Pinnacle 4: remainder of life (no end age)
-//
-//  Pinnacle values:
-//    P1 = birth month + birth day
-//    P2 = birth day + birth year
-//    P3 = P1 + P2
-//    P4 = birth month + birth year
-//
-//  Challenge values:
-//    C1 = |birth month - birth day|
-//    C2 = |birth day - birth year|
-//    C3 = |C1 - C2|    (main challenge)
-//    C4 = |birth month - birth year|
 // ═══════════════════════════════════════════════════════════════
 function calcPinnaclesAndChallenges(dob, lifePathNumber, referenceDate = new Date()) {
   const { birth_day_number, birth_month_number, birth_year_number } =
@@ -339,12 +283,10 @@ function calcPinnaclesAndChallenges(dob, lifePathNumber, referenceDate = new Dat
 
   const lp = reduceToSingle(lifePathNumber);
 
-  // Pinnacle ages
   const p1End = 36 - lp;
   const p2End = p1End + 9;
   const p3End = p2End + 9;
 
-  // Pinnacle numbers
   const p1Raw = birth_month_number + birth_day_number;
   const p2Raw = birth_day_number + birth_year_number;
   const p3Raw = reducePreserveMaster(p1Raw) + reducePreserveMaster(p2Raw);
@@ -355,13 +297,11 @@ function calcPinnaclesAndChallenges(dob, lifePathNumber, referenceDate = new Dat
   const pinnacle_3 = reducePreserveMaster(p3Raw);
   const pinnacle_4 = reducePreserveMaster(p4Raw);
 
-  // Challenge numbers (absolute difference, no master/karmic preservation)
   const challenge_1 = Math.abs(birth_month_number - birth_day_number);
   const challenge_2 = Math.abs(birth_day_number - birth_year_number);
   const challenge_3 = Math.abs(challenge_1 - challenge_2);
   const challenge_4 = Math.abs(birth_month_number - birth_year_number);
 
-  // Current pinnacle based on age today
   const birthYear  = parseInt(dob.split('-')[0], 10);
   const birthMonth = parseInt(dob.split('-')[1], 10);
   const birthDay   = parseInt(dob.split('-')[2], 10);
@@ -403,11 +343,7 @@ function calcPinnaclesAndChallenges(dob, lifePathNumber, referenceDate = new Dat
 
 
 // ═══════════════════════════════════════════════════════════════
-//  13. LIFE PERIODS  (3 major cycles)
-//      Period 1: birth to (36 - life_path) — ruled by birth month
-//      Period 2: next 27 years — ruled by birth day
-//      Period 3: remainder — ruled by birth year
-//      (Life periods mirror pinnacle ages in Chaldean tradition)
+//  13. LIFE PERIODS
 // ═══════════════════════════════════════════════════════════════
 function calcLifePeriods(dob, lifePathNumber, referenceDate = new Date()) {
   const { birth_day_number, birth_month_number, birth_year_number } =
@@ -417,7 +353,6 @@ function calcLifePeriods(dob, lifePathNumber, referenceDate = new Date()) {
   const p1End = 36 - lp;
   const p2End = p1End + 27;
 
-  // Current age
   const birthYear  = parseInt(dob.split('-')[0], 10);
   const birthMonth = parseInt(dob.split('-')[1], 10);
   const birthDay   = parseInt(dob.split('-')[2], 10);
@@ -445,9 +380,6 @@ function calcLifePeriods(dob, lifePathNumber, referenceDate = new Date()) {
 
 // ═══════════════════════════════════════════════════════════════
 //  14. NAME ANALYSIS — Cornerstone, Capstone, First Vowel
-//      Cornerstone: first letter of full name (how you start things)
-//      Capstone:    last letter of full name (how you finish things)
-//      First Vowel: first vowel in full name (inner emotional response)
 // ═══════════════════════════════════════════════════════════════
 function calcNameAnalysis(name) {
   const letters = nameToLetters(name);
@@ -475,9 +407,6 @@ function calcNameAnalysis(name) {
 
 // ═══════════════════════════════════════════════════════════════
 //  15. MISSING NUMBERS / KARMIC LESSONS
-//      Values 1–8 absent from name letters.
-//      In Chaldean, 9 is sacred so we only check 1–8.
-//      Missing numbers = energy gaps = lessons for this lifetime.
 // ═══════════════════════════════════════════════════════════════
 function calcMissingNumbers(name) {
   const present = new Set(
@@ -489,9 +418,6 @@ function calcMissingNumbers(name) {
 
 // ═══════════════════════════════════════════════════════════════
 //  16. HIDDEN PASSIONS
-//      Values appearing 3 or more times in the name.
-//      These numbers dominate the personality — sometimes
-//      positively (talent), sometimes as obsession.
 // ═══════════════════════════════════════════════════════════════
 function calcHiddenPassions(name) {
   const freq = {};
@@ -508,9 +434,6 @@ function calcHiddenPassions(name) {
 
 // ═══════════════════════════════════════════════════════════════
 //  17. SUBCONSCIOUS SELF
-//      8 minus the count of missing numbers (Chaldean uses 1–8).
-//      Reveals how quickly you respond under pressure.
-//      Higher = more instinctive and resourceful under stress.
 // ═══════════════════════════════════════════════════════════════
 function calcSubconsciousSelf(missingNumbers) {
   return 8 - missingNumbers.length;
@@ -519,17 +442,8 @@ function calcSubconsciousSelf(missingNumbers) {
 
 // ═══════════════════════════════════════════════════════════════
 //  18. KARMIC DEBT
-//      Karmic debt compounds: 13, 14, 16, 19
-//      These appear in the pre-reduction (compound) values of
-//      core numbers. Their presence signals karmic lessons.
-//
-//      13 → laziness / transformation
-//      14 → overindulgence / freedom lessons
-//      16 → ego destruction / spiritual rebirth
-//      19 → selfishness / independence lessons
 // ═══════════════════════════════════════════════════════════════
 function calcKarmicDebt(compoundValues) {
-  // compoundValues: { life_path: 14, name: 32, soul_urge: 16, ... }
   const debt_numbers = [];
   const debt_locations = [];
 
@@ -550,12 +464,8 @@ function calcKarmicDebt(compoundValues) {
 
 // ═══════════════════════════════════════════════════════════════
 //  19. MASTER NUMBERS (11, 22, 33)
-//      Detected across all core reduced numbers.
-//      Master numbers carry elevated spiritual responsibility.
-//      11 = Master Intuitive  22 = Master Builder  33 = Master Teacher
 // ═══════════════════════════════════════════════════════════════
 function calcMasterNumbers(reducedValues) {
-  // reducedValues: { life_path: 11, name: 4, destiny: 22, ... }
   const found = [];
   const locations = [];
 
@@ -577,13 +487,6 @@ function calcMasterNumbers(reducedValues) {
 
 // ═══════════════════════════════════════════════════════════════
 //  20. PLANES OF EXPRESSION
-//      Each letter belongs to a plane based on its Chaldean value.
-//      Mental (1,2,3): thinkers, communicators
-//      Physical (4,5,6): builders, doers, sensualists
-//      Intuitive (7,8): mystics, visionaries
-//
-//      Count of letters per plane reveals dominant mode.
-//      Plane number = sum of values in that plane, reduced.
 // ═══════════════════════════════════════════════════════════════
 function calcPlanesOfExpression(name) {
   const planes = { mental: [], physical: [], emotional: [], intuitive: [] };
@@ -622,9 +525,6 @@ function calcPlanesOfExpression(name) {
 
 // ═══════════════════════════════════════════════════════════════
 //  21. BRIDGE NUMBERS
-//      Reveal the gap between two energies and how to close it.
-//      soul_expression_bridge = |soul_urge - name_number|
-//      life_personality_bridge = |life_path - personality|
 // ═══════════════════════════════════════════════════════════════
 function calcBridgeNumbers(soulUrge, nameNumber, lifePath, personality) {
   return {
@@ -640,8 +540,6 @@ function calcBridgeNumbers(soulUrge, nameNumber, lifePath, personality) {
 
 // ═══════════════════════════════════════════════════════════════
 //  22. RATIONAL THOUGHT NUMBER
-//      Birth day + birth year, reduced.
-//      Reveals HOW you think and process information.
 // ═══════════════════════════════════════════════════════════════
 function calcRationalThoughtNumber(dob) {
   const { birth_day_number, birth_year_number } = calcBirthComponents(dob);
@@ -652,8 +550,6 @@ function calcRationalThoughtNumber(dob) {
 
 // ═══════════════════════════════════════════════════════════════
 //  23. BALANCE NUMBER
-//      Initials of each word in the name, reduced.
-//      How you restore balance when life gets challenging.
 // ═══════════════════════════════════════════════════════════════
 function calcBalanceNumber(name) {
   const initials = name.toUpperCase().trim().split(/\s+/).map(w => w[0]);
@@ -664,18 +560,6 @@ function calcBalanceNumber(name) {
 
 // ═══════════════════════════════════════════════════════════════
 //  24. TRANSITS & ESSENCE NUMBER
-//
-//  Each letter of the name governs a span of years equal to
-//  its Chaldean value. Cycling through letters reveals which
-//  letter (transit) is active in the current year.
-//
-//  physical_transit  = active letter from FIRST name
-//  mental_transit    = active letter from MIDDLE name (or last if no middle)
-//  spiritual_transit = active letter from LAST name
-//
-//  essence_number = sum of all three transit values, reduced.
-//
-//  This is one of the most time-specific Chaldean tools.
 // ═══════════════════════════════════════════════════════════════
 function getActiveTransitLetter(namePart, age) {
   const letters = nameToLetters(namePart);
@@ -692,19 +576,16 @@ function getActiveTransitLetter(namePart, age) {
       return { letter: ch, value: letterValue(ch) };
     }
   }
-  // Fallback: last letter
   const last = letters[letters.length - 1];
   return { letter: last, value: letterValue(last) };
 }
 
 function calcTransits(name, dob, referenceDate = new Date()) {
-  // Split name into parts
   const parts = name.trim().split(/\s+/);
   const firstName  = parts[0] || '';
   const lastName   = parts[parts.length - 1] || '';
-  const middleName = parts.length >= 3 ? parts[1] : lastName; // fallback to last
+  const middleName = parts.length >= 3 ? parts[1] : lastName;
 
-  // Current age
   const birthYear  = parseInt(dob.split('-')[0], 10);
   const birthMonth = parseInt(dob.split('-')[1], 10);
   const birthDay   = parseInt(dob.split('-')[2], 10);
@@ -734,14 +615,106 @@ function calcTransits(name, dob, referenceDate = new Date()) {
 
 
 // ═══════════════════════════════════════════════════════════════
+//  25. LUCKY ATTRIBUTES
+//      Derived from psychic number (primary) and destiny number
+//      (secondary). No DB column needed — calculated on the fly
+//      and passed into the profile object for the prompt.
+//
+//      lucky_colors       — colours ruled by the psychic planet
+//      lucky_days         — days ruled by the psychic planet
+//      lucky_numbers      — dates/numbers vibrating with psychic
+//      lucky_gem          — primary gemstone for psychic number
+//      lucky_metal        — metal for the psychic planet
+//      favourable_months  — months that resonate with psychic
+//      secondary_gem      — gemstone for destiny number (if different)
+// ═══════════════════════════════════════════════════════════════
+
+const LUCKY_COLORS_MAP = {
+  1: ['Gold', 'Orange', 'Yellow'],
+  2: ['White', 'Silver', 'Cream'],
+  3: ['Yellow', 'Purple', 'Violet'],
+  4: ['Blue', 'Electric Blue', 'Grey'],
+  5: ['Green', 'Light Green', 'White'],
+  6: ['Pink', 'Blue', 'White'],
+  7: ['Grey', 'Violet', 'Cream'],
+  8: ['Black', 'Dark Blue', 'Dark Brown'],
+  9: ['Red', 'Crimson', 'Orange-Red'],
+};
+
+const LUCKY_GEM_MAP = {
+  1: { gem: 'Ruby',             metal: 'Gold'       },
+  2: { gem: 'Pearl',            metal: 'Silver'     },
+  3: { gem: 'Yellow Sapphire',  metal: 'Gold'       },
+  4: { gem: "Cat's Eye",        metal: 'Mixed'      },
+  5: { gem: 'Emerald',          metal: 'Gold'       },
+  6: { gem: 'Diamond',          metal: 'Silver'     },
+  7: { gem: "Cat's Eye",        metal: 'Mixed'      },
+  8: { gem: 'Blue Sapphire',    metal: 'Iron/Steel' },
+  9: { gem: 'Red Coral',        metal: 'Copper'     },
+};
+
+const LUCKY_DAYS_MAP = {
+  1: ['Sunday', 'Monday'],
+  2: ['Monday', 'Friday'],
+  3: ['Thursday', 'Tuesday'],
+  4: ['Sunday', 'Saturday'],
+  5: ['Wednesday', 'Friday'],
+  6: ['Friday', 'Wednesday'],
+  7: ['Monday', 'Sunday'],
+  8: ['Saturday', 'Sunday'],
+  9: ['Tuesday', 'Thursday'],
+};
+
+const LUCKY_NUMBERS_MAP = {
+  1: [1, 10, 19, 28],
+  2: [2, 11, 20, 29],
+  3: [3, 12, 21, 30],
+  4: [4, 13, 22, 31],
+  5: [5, 14, 23],
+  6: [6, 15, 24],
+  7: [7, 16, 25],
+  8: [8, 17, 26],
+  9: [9, 18, 27],
+};
+
+const FAVOURABLE_MONTHS_MAP = {
+  1: ['January', 'October', 'July'],
+  2: ['February', 'July', 'September'],
+  3: ['March', 'December', 'June'],
+  4: ['April', 'August', 'January'],
+  5: ['May', 'June', 'September'],
+  6: ['June', 'May', 'October'],
+  7: ['July', 'February', 'August'],
+  8: ['August', 'January', 'October'],
+  9: ['September', 'March', 'November'],
+};
+
+function getLuckyAttributes(psychicNumber, destinyNumber) {
+  const pn = reduceToSingle(psychicNumber) || 1;
+  const dn = reduceToSingle(destinyNumber) || 1;
+
+  const primaryColors   = LUCKY_COLORS_MAP[pn] || LUCKY_COLORS_MAP[1];
+  const secondaryColors = LUCKY_COLORS_MAP[dn] || LUCKY_COLORS_MAP[1];
+  const primaryGem      = LUCKY_GEM_MAP[pn]    || LUCKY_GEM_MAP[1];
+  const secondaryGem    = LUCKY_GEM_MAP[dn]    || LUCKY_GEM_MAP[1];
+
+  // Merge — psychic colours are primary, add one from destiny if different
+  const allColors = [...new Set([...primaryColors, secondaryColors[0]])];
+
+  return {
+    lucky_colors:      allColors,
+    lucky_days:        LUCKY_DAYS_MAP[pn]        || [],
+    lucky_numbers:     LUCKY_NUMBERS_MAP[pn]     || [],
+    lucky_gem:         primaryGem.gem,
+    lucky_metal:       primaryGem.metal,
+    favourable_months: FAVOURABLE_MONTHS_MAP[pn] || [],
+    secondary_gem:     secondaryGem.gem !== primaryGem.gem ? secondaryGem.gem : null,
+  };
+}
+
+
+// ═══════════════════════════════════════════════════════════════
 //  MASTER BUILDER: buildNumerologyProfile
-//
-//  The single function called by your services.
-//  Returns a flat object matching ALL 83 columns of
-//  numerology_profiles in the database.
-//
-//  Usage:
-//    const profile = buildNumerologyProfile('Guru Prasad', '1991-07-23');
 // ═══════════════════════════════════════════════════════════════
 function buildNumerologyProfile(name, dob, referenceDate = new Date()) {
   // ── Core numbers ─────────────────────────────────────────
@@ -769,12 +742,11 @@ function buildNumerologyProfile(name, dob, referenceDate = new Date()) {
   const nameAnalysis = calcNameAnalysis(name);
 
   // ── Missing / hidden / subconscious ──────────────────────
-  const missing_numbers = calcMissingNumbers(name);
-  const hidden_passions = calcHiddenPassions(name);
+  const missing_numbers   = calcMissingNumbers(name);
+  const hidden_passions   = calcHiddenPassions(name);
   const subconscious_self = calcSubconsciousSelf(missing_numbers);
 
   // ── Karmic debt ───────────────────────────────────────────
-  // Check compounds of all major numbers for karmic debt
   const karmic = calcKarmicDebt({
     life_path:   lifePath.compound,
     name:        nameNum.compound,
@@ -814,13 +786,14 @@ function buildNumerologyProfile(name, dob, referenceDate = new Date()) {
   const ruling_planet  = RULING_PLANETS[psychic.number] || null;
   const pd_combination = `${psychic.number}-${destiny.number}`;
 
+  // ── Lucky attributes ──────────────────────────────────────
+  const luckyAttributes = getLuckyAttributes(psychic.number, destiny.number);
+
   // ── Assemble final profile object ─────────────────────────
   return {
-    // Identity (caller sets name_used, dob_used, user_id, is_primary)
     name_used: name,
     dob_used:  dob,
 
-    // Core Chaldean numbers
     psychic_number:        psychic.number,
     psychic_compound:      psychic.compound,
     destiny_number:        destiny.number,
@@ -839,60 +812,48 @@ function buildNumerologyProfile(name, dob, referenceDate = new Date()) {
     ruling_planet,
     pd_combination,
 
-    // Life path
     life_path_number:    lifePath.number,
     life_path_compound:  lifePath.compound,
     ...birthComp,
 
-    // Time cycles
     ...personalCycles,
     ...universalCycles,
 
-    // Pinnacles + challenges
     ...pinnacles,
 
-    // Life periods
     ...periods,
 
-    // Name analysis
     ...nameAnalysis,
 
-    // Subconscious + hidden
     subconscious_self,
     hidden_passions,
-    karmic_lessons:   missing_numbers,   // same values, different label
+    karmic_lessons:   missing_numbers,
     missing_numbers,
 
-    // Karmic debt
     ...karmic,
 
-    // Master numbers
     ...masters,
 
-    // Planes of expression
     ...planes,
 
-    // Bridge numbers
     ...bridges,
 
-    // Additional derived
     rational_thought_number,
     balance_number,
 
-    // Transits + essence
     ...transits,
 
-    // Meta
+    // Lucky attributes
+    ...luckyAttributes,
+
     schema_version: 3,
 
-    // Convenience for display
     dob_fmt: formatDob(dob),
   };
 }
 
 
 module.exports = {
-  // Individual calculators (export for testing / partial use)
   calcPsychicNumber,
   calcDestinyNumber,
   calcLifePathNumber,
@@ -917,17 +878,15 @@ module.exports = {
   calcRationalThoughtNumber,
   calcBalanceNumber,
   calcTransits,
+  getLuckyAttributes,
 
-  // Master builder — use this in your services
   buildNumerologyProfile,
 
-  // Constants (useful in prompts / interpretation)
   LETTER_VALUES,
   RULING_PLANETS,
   MASTER_NUMBERS,
   KARMIC_DEBT_NUMBERS,
 
-  // Utilities
   reduceToSingle,
   reducePreserveMaster,
   reducePreserveMasterAndKarmic,

@@ -606,9 +606,8 @@ function renderHowToClose(howToClose) {
 function buildPaidHTMLFromClaudeJSON(d, profile) {
   const name      = profile.name_used || profile.name || 'Client';
   const dobFmt    = profile.dob_fmt   || profile.dob_used || '';
-  const nameParts = (name).trim().split(/\s+/);
-  const firstName = (nameParts[0].length === 1 && nameParts[1]) ? nameParts[1] : nameParts[0];
-  const currentYear = new Date().getFullYear();
+const nameParts = (name).trim().split(/\s+/);
+const firstName = nameParts.find(p => p.length > 1) || nameParts[0];  const currentYear = new Date().getFullYear();
   const genDate   = new Date().toLocaleDateString('en-IN', { day:'numeric', month:'long', year:'numeric' });
 
   const p = profile;

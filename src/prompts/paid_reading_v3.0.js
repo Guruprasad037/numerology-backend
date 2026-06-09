@@ -152,10 +152,9 @@ module.exports = function buildPrompt(profile) {
   } = profile;
 
   // ── Derived helpers ───────────────────────────────────────
-  const nameParts = (name_used || '').trim().split(/\s+/);
-  const firstName = (nameParts[0].length === 1 && nameParts[1])
-    ? nameParts[1]
-    : nameParts[0] || 'friend';
+// REPLACE WITH:
+const nameParts = (name_used || '').trim().split(/\s+/);
+const firstName = nameParts.find(p => p.length > 1) || nameParts[0] || 'friend';
 
   const currentYear = new Date().getFullYear();
 

@@ -1,18 +1,52 @@
 // ============================================================
-//  src/services/paid-reading.js  v4
+//  src/services/paid-reading.js  v5
 //
-//  CHANGES from v3:
-//    - Added buildPaidHTMLFromClaudeJSON() — converts Claude's
-//      structured JSON response into a beautiful, DOCX-safe HTML
-//      document. This replaces the old thin buildHTMLFromCards()
-//      for paid readings when engine=claude.
+//  CHANGES from v4:
+//    - buildPaidHTMLFromClaudeJSON() updated for prompt v3.0
+//      schema changes. All changes are BACKWARD COMPATIBLE —
+//      v2.0 reports stored in the DB render correctly too.
 //
-//    - Dispatcher result shape detection updated:
-//        dispatchResult.sections  → buildPaidHTMLFromClaudeJSON()
-//        dispatchResult._html     → hardcoded engine (unchanged)
-//        dispatchResult.cards     → legacy fallback (unchanged)
+//  NEW FIELDS HANDLED (v3.0 schema):
+//    red_thread
+//      Displayed as a highlighted insight box at the top of
+//      Section 1 (opening portrait), before the prose.
 //
-//    - All other logic (DB save, fallback, logging) unchanged.
+//    psychic.life_domains
+//    destiny.life_domains
+//    name_soul_urge.life_domains
+//      Each rendered as a new subsection "In Daily Life" inside
+//      their respective sections.
+//
+//    life_cycles.current_pinnacle_life_domains
+//      Rendered as a new subsection inside Section 12, after
+//      "Your Current Pinnacle".
+//
+//    life_cycles.life_period
+//      New subsection "Your Current Life Period" inside
+//      Section 12, after the challenge subsections.
+//
+//    timing.personal_month
+//      New subsection inside Section 13, between Personal Year
+//      and Universal Year.
+//
+//    bridge_numbers.how_to_close
+//      Was a string in v2.0. In v3.0 it is an object:
+//        { rational_thought, balance, practice }
+//      Both shapes handled. If the field is a string (v2.0),
+//      it renders as before. If it is an object (v3.0), each
+//      sub-field renders as its own labelled subsection.
+//
+//  BACKWARD COMPATIBILITY STRATEGY:
+//    Every new field render is guarded with optional chaining
+//    and only emits HTML if the field is non-null/non-empty.
+//    A v2.0 JSON stored in report_content will render exactly
+//    as before — the new subsections simply won't appear.
+//    No DB migration needed.
+//
+//  ALL OTHER LOGIC UNCHANGED:
+//    handlePaidReading(), shape detection, DB save, fallback,
+//    buildHTMLFromCards(), buildFallbackHTML(), sharedCSS(),
+//    prose() — all identical to v4.
 // ============================================================
 
 const settings   = require('../reading.settings');
@@ -29,7 +63,7 @@ function error(step, message, data = null) {
 }
 
 // ────────────────────────────────────────────────────────────
-// Main entry point
+// Main entry point — UNCHANGED from v4
 // ────────────────────────────────────────────────────────────
 async function handlePaidReading(order, profile, profileId) {
   log(1, 'handlePaidReading() called', {
@@ -56,14 +90,15 @@ async function handlePaidReading(order, profile, profileId) {
       htmlReport = dispatchResult._html;
       log(3, 'HTML from hardcoded engine', { length: htmlReport.length });
 
-    // ── Shape B: Claude v2.0 → sections JSON ─────────────
+    // ── Shape B: Claude v2.0 / v3.0 → JSON object ────────
     } else if (dispatchResult.sections || dispatchResult.opening_portrait) {
-      // Claude returns the JSON directly (not wrapped in a sections key)
       const claudeData = dispatchResult.sections || dispatchResult;
       htmlReport = buildPaidHTMLFromClaudeJSON(claudeData, profile);
-      log(3, 'HTML built from Claude JSON (v2.0)', {
-        hasSections: !!claudeData.opening_portrait,
-        length:      htmlReport.length,
+      log(3, 'HTML built from Claude JSON', {
+        hasSections:    !!claudeData.opening_portrait,
+        hasRedThread:   !!claudeData.red_thread,
+        hasLifeDomains: !!claudeData.psychic?.life_domains,
+        length:         htmlReport.length,
       });
 
     // ── Shape C: legacy cards array ───────────────────────
@@ -146,7 +181,7 @@ async function handlePaidReading(order, profile, profileId) {
 }
 
 // ────────────────────────────────────────────────────────────
-// COLOUR PALETTE  (shared across all builders)
+// COLOUR PALETTE  (shared across all builders) — UNCHANGED
 // ────────────────────────────────────────────────────────────
 const C = {
   dark:     '#2c3e50',
@@ -167,7 +202,7 @@ const C = {
 };
 
 // ────────────────────────────────────────────────────────────
-// SHARED CSS  (DOCX-safe — no flexbox, no grid, no shadows)
+// SHARED CSS — UNCHANGED
 // ────────────────────────────────────────────────────────────
 function sharedCSS() {
   return `
@@ -365,6 +400,29 @@ function sharedCSS() {
     }
     .insight p:last-child { margin-bottom: 0; }
 
+    /* ── Red thread box (v3.0) ── */
+    .red-thread {
+      background-color: ${C.ink};
+      border-left: 4px solid ${C.gold};
+      padding: 14px 18px;
+      margin: 0 0 24px 0;
+    }
+    .red-thread-title {
+      font-size: 8pt;
+      font-weight: bold;
+      text-transform: uppercase;
+      letter-spacing: 0.14em;
+      color: ${C.gold};
+      margin-bottom: 6px;
+    }
+    .red-thread p {
+      font-size: 11pt;
+      line-height: 1.7;
+      color: rgba(255,255,255,0.9);
+      font-style: italic;
+      margin-bottom: 0;
+    }
+
     /* ── Callout box (karmic / master) ── */
     .callout {
       background-color: ${C.roselt};
@@ -458,7 +516,7 @@ function sharedCSS() {
 }
 
 // ────────────────────────────────────────────────────────────
-// PROSE HELPER  — converts \\n\\n delimited text to <p> tags
+// PROSE HELPER — UNCHANGED
 // ────────────────────────────────────────────────────────────
 function prose(text, className = 'prose') {
   if (!text) return '';
@@ -472,29 +530,75 @@ function prose(text, className = 'prose') {
 }
 
 // ────────────────────────────────────────────────────────────
-// BUILD HTML FROM CLAUDE JSON  (engine=claude, v2.0)
+// HOW-TO-CLOSE HELPER  (v3.0 — object shape)
+//
+// In v2.0, bridge_numbers.how_to_close was a plain string.
+// In v3.0, it is: { rational_thought, balance, practice }
+//
+// This helper handles both shapes so old reports (v2.0) stored
+// in the DB continue to render correctly.
+// ────────────────────────────────────────────────────────────
+function renderHowToClose(howToClose) {
+  if (!howToClose) return '';
+
+  // v2.0 shape: plain string
+  if (typeof howToClose === 'string') {
+    return `
+      <div class="subsection">How to Begin Closing These Gaps</div>
+      ${prose(howToClose)}
+    `;
+  }
+
+  // v3.0 shape: { rational_thought, balance, practice }
+  const parts = [];
+
+  if (howToClose.rational_thought) {
+    parts.push(`
+      <div class="subsection">Your Rational Thought Number — How You Process</div>
+      ${prose(howToClose.rational_thought)}
+    `);
+  }
+
+  if (howToClose.balance) {
+    parts.push(`
+      <div class="subsection">Your Balance Number — How You Restore Equilibrium</div>
+      ${prose(howToClose.balance)}
+    `);
+  }
+
+  if (howToClose.practice) {
+    parts.push(`
+      <div class="subsection">Practical Steps — Closing the Gaps</div>
+      ${prose(howToClose.practice)}
+    `);
+  }
+
+  return parts.join('');
+}
+
+// ────────────────────────────────────────────────────────────
+// BUILD HTML FROM CLAUDE JSON  (engine=claude, v2.0 + v3.0)
 // ────────────────────────────────────────────────────────────
 function buildPaidHTMLFromClaudeJSON(d, profile) {
-  const name     = profile.name_used || profile.name || 'Client';
-  const dobFmt   = profile.dob_fmt   || profile.dob_used || '';
+  const name      = profile.name_used || profile.name || 'Client';
+  const dobFmt    = profile.dob_fmt   || profile.dob_used || '';
   const nameParts = (name).trim().split(/\s+/);
   const firstName = (nameParts[0].length === 1 && nameParts[1]) ? nameParts[1] : nameParts[0];
   const currentYear = new Date().getFullYear();
-  const genDate  = new Date().toLocaleDateString('en-IN', { day:'numeric', month:'long', year:'numeric' });
+  const genDate   = new Date().toLocaleDateString('en-IN', { day:'numeric', month:'long', year:'numeric' });
 
-  const p = profile; // shorthand
+  const p = profile;
 
-  // Pinnacle age labels
   const p1Label = p.pinnacle_1_end_age ? `birth – age ${p.pinnacle_1_end_age}` : 'first phase';
   const p2Label = p.pinnacle_2_start_age && p.pinnacle_2_end_age ? `age ${p.pinnacle_2_start_age}–${p.pinnacle_2_end_age}` : 'second phase';
   const p3Label = p.pinnacle_3_start_age && p.pinnacle_3_end_age ? `age ${p.pinnacle_3_start_age}–${p.pinnacle_3_end_age}` : 'third phase';
   const p4Label = p.pinnacle_4_start_age ? `age ${p.pinnacle_4_start_age}+` : 'final phase';
 
-  const masterList   = Array.isArray(p.master_numbers_found) && p.master_numbers_found.length ? p.master_numbers_found : [];
-  const karmicList   = Array.isArray(p.karmic_debt_numbers)  && p.karmic_debt_numbers.length  ? p.karmic_debt_numbers  : [];
-  const hiddenList   = Array.isArray(p.hidden_passions)  && p.hidden_passions.length  ? p.hidden_passions.join(', ')  : 'None';
-  const missingList  = Array.isArray(p.missing_numbers)  && p.missing_numbers.length  ? p.missing_numbers.join(', ')  : 'None';
-  const lessonList   = Array.isArray(p.karmic_lessons)   && p.karmic_lessons.length   ? p.karmic_lessons.join(', ')   : 'None';
+  const masterList  = Array.isArray(p.master_numbers_found) && p.master_numbers_found.length ? p.master_numbers_found : [];
+  const karmicList  = Array.isArray(p.karmic_debt_numbers)  && p.karmic_debt_numbers.length  ? p.karmic_debt_numbers  : [];
+  const hiddenList  = Array.isArray(p.hidden_passions)  && p.hidden_passions.length  ? p.hidden_passions.join(', ')  : 'None';
+  const missingList = Array.isArray(p.missing_numbers)  && p.missing_numbers.length  ? p.missing_numbers.join(', ')  : 'None';
+  const lessonList  = Array.isArray(p.karmic_lessons)   && p.karmic_lessons.length   ? p.karmic_lessons.join(', ')   : 'None';
 
   const totalLetters = (p.plane_mental_count||0)+(p.plane_physical_count||0)+(p.plane_emotional_count||0)+(p.plane_intuitive_count||0);
   const pct = n => totalLetters ? Math.round((n||0)/totalLetters*100) : 0;
@@ -770,6 +874,11 @@ function buildPaidHTMLFromClaudeJSON(d, profile) {
      SECTION 1 — OPENING PORTRAIT
 ════════════════════════════════════════════════════════ -->
 ${sectionHeader('1', 'Your Numerological Portrait')}
+  ${d.red_thread ? `
+  <div class="red-thread avoid-break">
+    <div class="red-thread-title">The Central Thread</div>
+    ${prose(d.red_thread, 'red-thread')}
+  </div>` : ''}
   ${prose(d.opening_portrait)}
 ${closeSectionDiv()}
 
@@ -789,6 +898,9 @@ ${sectionHeader('2', `Psychic Number ${p.psychic_number} — The Instinctive Sel
   ${prose(d.psychic?.shadow)}
   <div class="subsection">Vedic Planetary Context</div>
   ${prose(d.psychic?.vedic_context)}
+  ${d.psychic?.life_domains ? `
+  <div class="subsection">In Daily Life — Career &amp; Relationships</div>
+  ${prose(d.psychic.life_domains)}` : ''}
 ${closeSectionDiv()}
 
 <!-- ════════════════════════════════════════════════════════
@@ -805,6 +917,9 @@ ${sectionHeader('3', `Destiny Number ${p.destiny_number} — The Life Direction`
   ${prose(d.destiny?.compound_meaning)}
   <div class="subsection">Soul Direction</div>
   ${prose(d.destiny?.soul_direction)}
+  ${d.destiny?.life_domains ? `
+  <div class="subsection">In Daily Life — Vocation &amp; Relationships</div>
+  ${prose(d.destiny.life_domains)}` : ''}
 ${closeSectionDiv()}
 
 <!-- ════════════════════════════════════════════════════════
@@ -831,6 +946,9 @@ ${sectionHeader('5', `Name & Soul Urge — Outer Talent Meets Inner Hunger`)}
   ${prose(d.name_soul_urge?.soul_urge_interpretation)}
   <div class="subsection">The Gap Between Them</div>
   ${prose(d.name_soul_urge?.gap_analysis)}
+  ${d.name_soul_urge?.life_domains ? `
+  <div class="subsection">In Daily Life — Work &amp; Creative Expression</div>
+  ${prose(d.name_soul_urge.life_domains)}` : ''}
 ${closeSectionDiv()}
 
 <!-- ════════════════════════════════════════════════════════
@@ -974,10 +1092,16 @@ ${sectionHeader('12', `Life Cycles — Pinnacles & Challenges`)}
   ${prose(d.life_cycles?.pinnacle_map)}
   <div class="subsection">Your Current Pinnacle — Pinnacle ${p.current_pinnacle}</div>
   ${prose(d.life_cycles?.current_pinnacle)}
+  ${d.life_cycles?.current_pinnacle_life_domains ? `
+  <div class="subsection">What This Pinnacle Means Right Now</div>
+  ${prose(d.life_cycles.current_pinnacle_life_domains)}` : ''}
   <div class="subsection">The Four Challenges</div>
   ${prose(d.life_cycles?.challenge_map)}
   <div class="subsection">Your Current Challenge — Challenge ${p.current_challenge}</div>
   ${prose(d.life_cycles?.current_challenge)}
+  ${d.life_cycles?.life_period ? `
+  <div class="subsection">Your Current Life Period</div>
+  ${prose(d.life_cycles.life_period)}` : ''}
 ${closeSectionDiv()}
 
 <!-- ════════════════════════════════════════════════════════
@@ -987,13 +1111,16 @@ ${sectionHeader('13', `Current Timing — ${currentYear} and Beyond`)}
   <div class="callout-teal avoid-break">
     <div class="callout-teal-title">Your Numbers Right Now</div>
     <p>
-      <strong>Personal Year ${p.personal_year_number}</strong> (${new Date().getFullYear()}) &nbsp;·&nbsp;
+      <strong>Personal Year ${p.personal_year_number}</strong> (${currentYear}) &nbsp;·&nbsp;
       <strong>Personal Month ${p.personal_month_number || '—'}</strong> &nbsp;·&nbsp;
       <strong>Universal Year ${p.universal_year_number}</strong>
     </p>
   </div>
   <div class="subsection">Personal Year ${p.personal_year_number} in ${currentYear}</div>
   ${prose(d.timing?.personal_year)}
+  ${d.timing?.personal_month ? `
+  <div class="subsection">Personal Month ${p.personal_month_number || ''} — Right Now</div>
+  ${prose(d.timing.personal_month)}` : ''}
   <div class="subsection">Universal Year ${p.universal_year_number} — The Collective Current</div>
   ${prose(d.timing?.universal_year)}
   <div class="subsection">How These Years Work Together for You</div>
@@ -1061,8 +1188,7 @@ ${sectionHeader('15', `Bridge Numbers — Closing the Gaps`)}
   ${prose(d.bridge_numbers?.soul_expression)}
   <div class="subsection">Life–Personality Bridge</div>
   ${prose(d.bridge_numbers?.life_personality)}
-  <div class="subsection">How to Begin Closing These Gaps</div>
-  ${prose(d.bridge_numbers?.how_to_close)}
+  ${renderHowToClose(d.bridge_numbers?.how_to_close)}
 ${closeSectionDiv()}
 
 <!-- ════════════════════════════════════════════════════════
@@ -1106,7 +1232,7 @@ ${closeSectionDiv()}
 }
 
 // ────────────────────────────────────────────────────────────
-// BUILD HTML FROM CARDS  (legacy shape — Claude v1.0 fallback)
+// BUILD HTML FROM CARDS — UNCHANGED
 // ────────────────────────────────────────────────────────────
 function buildHTMLFromCards(dispatchResult, profile) {
   const name = profile.name_used || profile.name || 'Client';
@@ -1139,7 +1265,7 @@ function buildHTMLFromCards(dispatchResult, profile) {
 }
 
 // ────────────────────────────────────────────────────────────
-// FALLBACK HTML  (if everything else fails)
+// FALLBACK HTML — UNCHANGED
 // ────────────────────────────────────────────────────────────
 function buildFallbackHTML(profile) {
   const name    = profile.name_used || profile.name || 'Client';

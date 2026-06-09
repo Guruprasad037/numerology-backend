@@ -1,52 +1,35 @@
 // ============================================================
-//  src/services/paid-reading.js  v5
+//  src/services/paid-reading.js  v6
 //
-//  CHANGES from v4:
-//    - buildPaidHTMLFromClaudeJSON() updated for prompt v3.0
-//      schema changes. All changes are BACKWARD COMPATIBLE —
-//      v2.0 reports stored in the DB render correctly too.
+//  CHANGES from v5:
+//    - Added report_ref_id generation and storage.
 //
-//  NEW FIELDS HANDLED (v3.0 schema):
-//    red_thread
-//      Displayed as a highlighted insight box at the top of
-//      Section 1 (opening portrait), before the prose.
+//  WHAT CHANGED (3 additions only, everything else identical):
 //
-//    psychic.life_domains
-//    destiny.life_domains
-//    name_soul_urge.life_domains
-//      Each rendered as a new subsection "In Daily Life" inside
-//      their respective sections.
+//  1. generateRefId() helper added at top of file (after imports).
+//     Takes reading.id (UUID), returns "OP-RD-{LAST_SEGMENT_UPPERCASE}".
+//     Example: reading id "237dabbb-b2dc-4b11-84c4-dc76f0687b7a"
+//              → "OP-RD-DC76F0687B7A"
 //
-//    life_cycles.current_pinnacle_life_domains
-//      Rendered as a new subsection inside Section 12, after
-//      "Your Current Pinnacle".
+//  2. In handlePaidReading(), after readingId is returned from
+//     the INSERT RETURNING, we immediately UPDATE the row to
+//     set report_ref_id. Fire-and-forget — if it fails it logs
+//     but does not break the reading flow.
 //
-//    life_cycles.life_period
-//      New subsection "Your Current Life Period" inside
-//      Section 12, after the challenge subsections.
+//  3. In buildPaidHTMLFromClaudeJSON(), the footer now includes
+//     the ref ID, and the cover page shows it. The ref ID is
+//     passed in via a new optional parameter.
+//     All other HTML builders (buildHTMLFromCards, buildFallbackHTML)
+//     also receive and display it.
 //
-//    timing.personal_month
-//      New subsection inside Section 13, between Personal Year
-//      and Universal Year.
+//  BACKWARD COMPATIBLE: if report_ref_id column doesn't exist yet
+//  (migration not run), the UPDATE fails silently. Run the migration
+//  before deploying this file.
 //
-//    bridge_numbers.how_to_close
-//      Was a string in v2.0. In v3.0 it is an object:
-//        { rational_thought, balance, practice }
-//      Both shapes handled. If the field is a string (v2.0),
-//      it renders as before. If it is an object (v3.0), each
-//      sub-field renders as its own labelled subsection.
-//
-//  BACKWARD COMPATIBILITY STRATEGY:
-//    Every new field render is guarded with optional chaining
-//    and only emits HTML if the field is non-null/non-empty.
-//    A v2.0 JSON stored in report_content will render exactly
-//    as before — the new subsections simply won't appear.
-//    No DB migration needed.
-//
-//  ALL OTHER LOGIC UNCHANGED:
-//    handlePaidReading(), shape detection, DB save, fallback,
-//    buildHTMLFromCards(), buildFallbackHTML(), sharedCSS(),
-//    prose() — all identical to v4.
+//  REQUIRES:
+//    ALTER TABLE readings ADD COLUMN IF NOT EXISTS report_ref_id VARCHAR(30);
+//    CREATE UNIQUE INDEX IF NOT EXISTS idx_readings_ref_id
+//      ON readings (report_ref_id) WHERE report_ref_id IS NOT NULL;
 // ============================================================
 
 const settings   = require('../reading.settings');
@@ -63,7 +46,25 @@ function error(step, message, data = null) {
 }
 
 // ────────────────────────────────────────────────────────────
-// Main entry point — UNCHANGED from v4
+// ADDITION 1 of 3 — generateRefId()
+//
+// Takes the readings.id UUID and returns a human-readable
+// reference ID for use in PDF footers and support emails.
+//
+// Format:  OP-RD-{LAST_SEGMENT_UPPERCASE}
+// Example: "237dabbb-b2dc-4b11-84c4-dc76f0687b7a"
+//        → "OP-RD-DC76F0687B7A"
+//
+// The last UUID segment (12 hex chars) is unique enough for
+// our volume and short enough to fit in a PDF footer.
+// ────────────────────────────────────────────────────────────
+function generateRefId(readingId) {
+  const lastSegment = (readingId || '').split('-').pop().toUpperCase();
+  return `OP-RD-${lastSegment}`;
+}
+
+// ────────────────────────────────────────────────────────────
+// Main entry point — only the ref ID additions are new
 // ────────────────────────────────────────────────────────────
 async function handlePaidReading(order, profile, profileId) {
   log(1, 'handlePaidReading() called', {
@@ -169,9 +170,51 @@ async function handlePaidReading(order, profile, profileId) {
   const readingId = readingResult.rows[0].id;
   log(7, 'Reading saved successfully', { readingId, engineConfig, engineUsed });
 
+  // ── ADDITION 2 of 3 — store report_ref_id ────────────────
+  // Generate the human-readable ref ID from the reading UUID
+  // and write it back to the row. Fire-and-forget — a failure
+  // here does not affect the reading or delivery.
+  //
+  // Requires DB migration:
+  //   ALTER TABLE readings ADD COLUMN IF NOT EXISTS report_ref_id VARCHAR(30);
+  //   CREATE UNIQUE INDEX IF NOT EXISTS idx_readings_ref_id
+  //     ON readings (report_ref_id) WHERE report_ref_id IS NOT NULL;
+  const refId = generateRefId(readingId);
+  dbRun(
+    `UPDATE readings SET report_ref_id = $1 WHERE id = $2`,
+    [refId, readingId]
+  ).then(() => {
+    log(7.1, 'report_ref_id stored', { readingId, refId });
+  }).catch(err => {
+    // Silently log — most likely cause is migration not yet run
+    console.warn(`[${FILE}] report_ref_id update failed (run DB migration if not done): ${err.message}`);
+  });
+
+  // ── Inject ref ID into the stored HTML ───────────────────
+  // Now that we have the ref ID, patch it into the HTML that's
+  // already been generated and stored. This replaces the
+  // placeholder we left in the HTML builders below.
+  // Also update report_content.html so the downloaded file has it.
+  const patchedHtml = htmlReport.replace(/\{\{REPORT_REF_ID\}\}/g, refId);
+  if (patchedHtml !== htmlReport) {
+    const patchedContent = {
+      ...reportContent,
+      html: patchedHtml,
+    };
+    dbRun(
+      `UPDATE readings SET report_content = $1 WHERE id = $2`,
+      [JSON.stringify(patchedContent), readingId]
+    ).then(() => {
+      log(7.2, 'HTML patched with ref ID', { refId });
+    }).catch(err => {
+      console.warn(`[${FILE}] HTML ref ID patch failed: ${err.message}`);
+    });
+  }
+
   return {
     success:      true,
     readingId,
+    refId,
     status:       'generated',
     engineConfig,
     engineUsed,
@@ -181,7 +224,7 @@ async function handlePaidReading(order, profile, profileId) {
 }
 
 // ────────────────────────────────────────────────────────────
-// COLOUR PALETTE  (shared across all builders) — UNCHANGED
+// COLOUR PALETTE — UNCHANGED
 // ────────────────────────────────────────────────────────────
 const C = {
   dark:     '#2c3e50',
@@ -216,7 +259,6 @@ function sharedCSS() {
       margin: 0;
       padding: 0;
     }
-    /* ── Cover ── */
     .cover {
       background-color: ${C.ink};
       color: ${C.white};
@@ -279,11 +321,13 @@ function sharedCSS() {
       line-height: 1.5;
       font-style: italic;
     }
-
-    /* ── Page wrapper ── */
+    .cover-ref {
+      margin-top: 16px;
+      font-size: 8pt;
+      letter-spacing: 0.12em;
+      color: rgba(183,134,11,0.5);
+    }
     .page { padding: 44px 52px; max-width: 800px; margin: 0 auto; }
-
-    /* ── Table of contents ── */
     .toc-title {
       font-family: Georgia, serif;
       font-size: 14pt;
@@ -296,8 +340,6 @@ function sharedCSS() {
     .toc-table td { padding: 5px 0; font-size: 10pt; }
     .toc-table td.toc-num { color: ${C.gold}; font-size: 9pt; width: 28px; }
     .toc-table td.toc-dots { color: ${C.border}; padding: 0 4px; }
-
-    /* ── Section headers ── */
     .section-header {
       background-color: ${C.dark};
       color: ${C.white};
@@ -320,8 +362,6 @@ function sharedCSS() {
       font-weight: normal;
       color: ${C.white};
     }
-
-    /* ── Subsection headers ── */
     .subsection {
       font-family: Georgia, serif;
       font-size: 12pt;
@@ -332,8 +372,6 @@ function sharedCSS() {
       margin-bottom: 10px;
       page-break-after: avoid;
     }
-
-    /* ── Body prose ── */
     .prose p {
       margin-bottom: 14px;
       font-size: 11pt;
@@ -342,8 +380,6 @@ function sharedCSS() {
       text-align: justify;
     }
     .prose p:last-child { margin-bottom: 0; }
-
-    /* ── Number reference table ── */
     .num-table {
       width: 100%;
       border-collapse: collapse;
@@ -376,8 +412,6 @@ function sharedCSS() {
       display: inline-block;
     }
     .num-table td.num-col { text-align: center; }
-
-    /* ── Insight box ── */
     .insight {
       background-color: ${C.goldlt};
       border-left: 4px solid ${C.gold};
@@ -399,8 +433,6 @@ function sharedCSS() {
       margin-bottom: 8px;
     }
     .insight p:last-child { margin-bottom: 0; }
-
-    /* ── Red thread box (v3.0) ── */
     .red-thread {
       background-color: ${C.ink};
       border-left: 4px solid ${C.gold};
@@ -422,8 +454,6 @@ function sharedCSS() {
       font-style: italic;
       margin-bottom: 0;
     }
-
-    /* ── Callout box (karmic / master) ── */
     .callout {
       background-color: ${C.roselt};
       border-left: 4px solid ${C.rose};
@@ -445,8 +475,6 @@ function sharedCSS() {
       margin-bottom: 8px;
     }
     .callout p:last-child { margin-bottom: 0; }
-
-    /* ── Teal callout (timing / transits) ── */
     .callout-teal {
       background-color: ${C.tealt};
       border-left: 4px solid ${C.teal};
@@ -468,8 +496,6 @@ function sharedCSS() {
       margin-bottom: 8px;
     }
     .callout-teal p:last-child { margin-bottom: 0; }
-
-    /* ── Closing synthesis ── */
     .closing {
       background-color: ${C.ink};
       color: ${C.white};
@@ -497,8 +523,6 @@ function sharedCSS() {
       font-size: 11.5pt;
       margin-bottom: 0;
     }
-
-    /* ── Footer ── */
     .footer {
       text-align: center;
       padding: 24px;
@@ -508,8 +532,13 @@ function sharedCSS() {
       color: ${C.muted};
       line-height: 1.6;
     }
-
-    /* ── Utility ── */
+    .footer-ref {
+      margin-top: 6px;
+      font-size: 7.5pt;
+      letter-spacing: 0.1em;
+      color: ${C.gold};
+      opacity: 0.7;
+    }
     .page-break { page-break-before: always; }
     .avoid-break { page-break-inside: avoid; }
   `;
@@ -530,18 +559,11 @@ function prose(text, className = 'prose') {
 }
 
 // ────────────────────────────────────────────────────────────
-// HOW-TO-CLOSE HELPER  (v3.0 — object shape)
-//
-// In v2.0, bridge_numbers.how_to_close was a plain string.
-// In v3.0, it is: { rational_thought, balance, practice }
-//
-// This helper handles both shapes so old reports (v2.0) stored
-// in the DB continue to render correctly.
+// HOW-TO-CLOSE HELPER — UNCHANGED
 // ────────────────────────────────────────────────────────────
 function renderHowToClose(howToClose) {
   if (!howToClose) return '';
 
-  // v2.0 shape: plain string
   if (typeof howToClose === 'string') {
     return `
       <div class="subsection">How to Begin Closing These Gaps</div>
@@ -549,7 +571,6 @@ function renderHowToClose(howToClose) {
     `;
   }
 
-  // v3.0 shape: { rational_thought, balance, practice }
   const parts = [];
 
   if (howToClose.rational_thought) {
@@ -577,7 +598,10 @@ function renderHowToClose(howToClose) {
 }
 
 // ────────────────────────────────────────────────────────────
-// BUILD HTML FROM CLAUDE JSON  (engine=claude, v2.0 + v3.0)
+// BUILD HTML FROM CLAUDE JSON
+// ADDITION 3 of 3 — ref ID injected into cover + footer
+// The ref ID is written as {{REPORT_REF_ID}} placeholder here.
+// handlePaidReading() patches it after the reading ID is known.
 // ────────────────────────────────────────────────────────────
 function buildPaidHTMLFromClaudeJSON(d, profile) {
   const name      = profile.name_used || profile.name || 'Client';
@@ -603,7 +627,6 @@ function buildPaidHTMLFromClaudeJSON(d, profile) {
   const totalLetters = (p.plane_mental_count||0)+(p.plane_physical_count||0)+(p.plane_emotional_count||0)+(p.plane_intuitive_count||0);
   const pct = n => totalLetters ? Math.round((n||0)/totalLetters*100) : 0;
 
-  // ── Section builder helpers ─────────────────────────────
   function sectionHeader(num, title) {
     return `
     <div class="section-header avoid-break">
@@ -614,7 +637,6 @@ function buildPaidHTMLFromClaudeJSON(d, profile) {
   }
   function closeSectionDiv() { return `</div>`; }
 
-  // ── TOC entries ─────────────────────────────────────────
   const tocEntries = [
     { num:'1',  title:'Your Numerological Portrait' },
     { num:'2',  title:`Psychic Number ${p.psychic_number} — The Instinctive Self` },
@@ -635,7 +657,6 @@ function buildPaidHTMLFromClaudeJSON(d, profile) {
     { num:'17', title:`Closing Synthesis` },
   ];
 
-  // ── Assemble HTML ───────────────────────────────────────
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -646,39 +667,18 @@ function buildPaidHTMLFromClaudeJSON(d, profile) {
 </head>
 <body>
 
-<!-- ════════════════════════════════════════════════════════
-     COVER PAGE
-════════════════════════════════════════════════════════ -->
 <div class="cover">
   <div class="cover-brand">✦ Occult Pulse ✦</div>
   <div class="cover-title">Complete Chaldean<br>Numerology Reading</div>
   <div class="cover-subtitle">A personal blueprint in numbers</div>
   <hr class="cover-divider"/>
   <table class="cover-meta-table">
-    <tr>
-      <td class="lbl">Prepared for</td>
-      <td>${name}</td>
-    </tr>
-    <tr>
-      <td class="lbl">Date of Birth</td>
-      <td>${dobFmt}</td>
-    </tr>
-    <tr>
-      <td class="lbl">Ruling Planet</td>
-      <td>${p.ruling_planet || '—'}</td>
-    </tr>
-    <tr>
-      <td class="lbl">PD Combination</td>
-      <td>${p.pd_combination || `${p.psychic_number}-${p.destiny_number}`}</td>
-    </tr>
-    <tr>
-      <td class="lbl">Numerology System</td>
-      <td>Chaldean (Ancient Babylonian)</td>
-    </tr>
-    <tr>
-      <td class="lbl">Generated on</td>
-      <td>${genDate}</td>
-    </tr>
+    <tr><td class="lbl">Prepared for</td><td>${name}</td></tr>
+    <tr><td class="lbl">Date of Birth</td><td>${dobFmt}</td></tr>
+    <tr><td class="lbl">Ruling Planet</td><td>${p.ruling_planet || '—'}</td></tr>
+    <tr><td class="lbl">PD Combination</td><td>${p.pd_combination || `${p.psychic_number}-${p.destiny_number}`}</td></tr>
+    <tr><td class="lbl">Numerology System</td><td>Chaldean (Ancient Babylonian)</td></tr>
+    <tr><td class="lbl">Generated on</td><td>${genDate}</td></tr>
   </table>
   ${masterList.length ? `<div style="margin-top:28px;display:inline-block;background:rgba(183,134,11,0.2);border:1px solid rgba(183,134,11,0.5);padding:8px 20px;">
     <span style="color:${C.gold};font-size:9pt;letter-spacing:0.18em;text-transform:uppercase;">⭐ Master Number ${masterList.join(' & ')} Detected</span>
@@ -691,11 +691,9 @@ function buildPaidHTMLFromClaudeJSON(d, profile) {
     It is not a prediction of future events and does not constitute medical, legal, or financial advice.<br>
     Numerology is a symbolic system — interpret it with openness and your own discernment.
   </div>
+  <div class="cover-ref">{{REPORT_REF_ID}}</div>
 </div>
 
-<!-- ════════════════════════════════════════════════════════
-     TABLE OF CONTENTS
-════════════════════════════════════════════════════════ -->
 <div class="page" style="padding-top:40px;page-break-after:always;">
   <div class="toc-title">Contents</div>
   <table class="toc-table">
@@ -707,9 +705,6 @@ function buildPaidHTMLFromClaudeJSON(d, profile) {
   </table>
 </div>
 
-<!-- ════════════════════════════════════════════════════════
-     CORE NUMBERS REFERENCE TABLE
-════════════════════════════════════════════════════════ -->
 <div class="page" style="padding-top:32px;page-break-after:always;">
   <div style="font-family:Georgia,serif;font-size:16pt;color:${C.dark};border-bottom:2px solid ${C.gold};padding-bottom:10px;margin-bottom:20px;">
     Your Core Numbers at a Glance
@@ -786,11 +781,10 @@ function buildPaidHTMLFromClaudeJSON(d, profile) {
 
   <table class="num-table" style="margin-top:28px;">
     <thead>
+      <tr><th colspan="4">Additional Reference Numbers</th></tr>
       <tr>
-        <th colspan="4">Additional Reference Numbers</th>
-      </tr>
-      <tr>
-        <th>Number</th><th style="text-align:center;">Value</th><th>Number</th><th style="text-align:center;">Value</th>
+        <th>Number</th><th style="text-align:center;">Value</th>
+        <th>Number</th><th style="text-align:center;">Value</th>
       </tr>
     </thead>
     <tbody>
@@ -870,9 +864,6 @@ function buildPaidHTMLFromClaudeJSON(d, profile) {
   </div>
 </div>
 
-<!-- ════════════════════════════════════════════════════════
-     SECTION 1 — OPENING PORTRAIT
-════════════════════════════════════════════════════════ -->
 ${sectionHeader('1', 'Your Numerological Portrait')}
   ${d.red_thread ? `
   <div class="red-thread avoid-break">
@@ -882,9 +873,6 @@ ${sectionHeader('1', 'Your Numerological Portrait')}
   ${prose(d.opening_portrait)}
 ${closeSectionDiv()}
 
-<!-- ════════════════════════════════════════════════════════
-     SECTION 2 — PSYCHIC NUMBER
-════════════════════════════════════════════════════════ -->
 ${sectionHeader('2', `Psychic Number ${p.psychic_number} — The Instinctive Self`)}
   <div class="insight avoid-break">
     <div class="insight-title">At a Glance</div>
@@ -903,9 +891,6 @@ ${sectionHeader('2', `Psychic Number ${p.psychic_number} — The Instinctive Sel
   ${prose(d.psychic.life_domains)}` : ''}
 ${closeSectionDiv()}
 
-<!-- ════════════════════════════════════════════════════════
-     SECTION 3 — DESTINY NUMBER
-════════════════════════════════════════════════════════ -->
 ${sectionHeader('3', `Destiny Number ${p.destiny_number} — The Life Direction`)}
   <div class="insight avoid-break">
     <div class="insight-title">At a Glance</div>
@@ -922,9 +907,6 @@ ${sectionHeader('3', `Destiny Number ${p.destiny_number} — The Life Direction`
   ${prose(d.destiny.life_domains)}` : ''}
 ${closeSectionDiv()}
 
-<!-- ════════════════════════════════════════════════════════
-     SECTION 4 — PD COMBINATION
-════════════════════════════════════════════════════════ -->
 ${sectionHeader('4', `The ${p.pd_combination || `${p.psychic_number}-${p.destiny_number}`} Combination`)}
   <div class="subsection">How These Two Energies Meet</div>
   ${prose(d.pd_combination?.interpretation)}
@@ -932,9 +914,6 @@ ${sectionHeader('4', `The ${p.pd_combination || `${p.psychic_number}-${p.destiny
   ${prose(d.pd_combination?.tension_or_flow)}
 ${closeSectionDiv()}
 
-<!-- ════════════════════════════════════════════════════════
-     SECTION 5 — NAME & SOUL URGE
-════════════════════════════════════════════════════════ -->
 ${sectionHeader('5', `Name & Soul Urge — Outer Talent Meets Inner Hunger`)}
   <div class="insight avoid-break">
     <div class="insight-title">At a Glance</div>
@@ -951,9 +930,6 @@ ${sectionHeader('5', `Name & Soul Urge — Outer Talent Meets Inner Hunger`)}
   ${prose(d.name_soul_urge.life_domains)}` : ''}
 ${closeSectionDiv()}
 
-<!-- ════════════════════════════════════════════════════════
-     SECTION 6 — PERSONALITY NUMBER
-════════════════════════════════════════════════════════ -->
 ${sectionHeader('6', `Personality Number ${p.personality_number} — How the World Sees You`)}
   <div class="insight avoid-break">
     <div class="insight-title">At a Glance</div>
@@ -965,9 +941,6 @@ ${sectionHeader('6', `Personality Number ${p.personality_number} — How the Wor
   ${prose(d.personality?.mask_vs_self)}
 ${closeSectionDiv()}
 
-<!-- ════════════════════════════════════════════════════════
-     SECTION 7 — NAME LETTERS
-════════════════════════════════════════════════════════ -->
 ${sectionHeader('7', `The Letters of Your Name`)}
   <div class="subsection">Cornerstone — ${p.cornerstone || '?'} (value ${p.cornerstone_value || '?'}) — How You Begin</div>
   ${prose(d.name_letters?.cornerstone)}
@@ -979,9 +952,6 @@ ${sectionHeader('7', `The Letters of Your Name`)}
   ${prose(d.name_letters?.synthesis)}
 ${closeSectionDiv()}
 
-<!-- ════════════════════════════════════════════════════════
-     SECTION 8 — PLANES OF EXPRESSION
-════════════════════════════════════════════════════════ -->
 ${sectionHeader('8', `Planes of Expression`)}
   <table class="num-table avoid-break">
     <thead>
@@ -1002,9 +972,6 @@ ${sectionHeader('8', `Planes of Expression`)}
   ${prose(d.planes?.subconscious_self)}
 ${closeSectionDiv()}
 
-<!-- ════════════════════════════════════════════════════════
-     SECTION 9 — HIDDEN PATTERNS
-════════════════════════════════════════════════════════ -->
 ${sectionHeader('9', `Hidden Passions & Karmic Lessons`)}
   <div class="insight avoid-break">
     <div class="insight-title">Pattern Summary</div>
@@ -1018,9 +985,6 @@ ${sectionHeader('9', `Hidden Passions & Karmic Lessons`)}
   ${prose(d.hidden_patterns?.synthesis)}
 ${closeSectionDiv()}
 
-<!-- ════════════════════════════════════════════════════════
-     SECTION 10 — KARMIC DEBT (conditional)
-════════════════════════════════════════════════════════ -->
 ${p.has_karmic_debt && karmicList.length && d.karmic_debt ? `
 ${sectionHeader('10', `Karmic Debt — The Soul's Accelerated Curriculum`)}
   <div class="callout avoid-break">
@@ -1030,9 +994,6 @@ ${sectionHeader('10', `Karmic Debt — The Soul's Accelerated Curriculum`)}
   ${prose(d.karmic_debt)}
 ${closeSectionDiv()}` : ''}
 
-<!-- ════════════════════════════════════════════════════════
-     SECTION 11 — MASTER NUMBERS (conditional)
-════════════════════════════════════════════════════════ -->
 ${masterList.length && d.master_numbers ? `
 ${sectionHeader('11', `Master Number${masterList.length > 1 ? 's' : ''} ${masterList.join(' & ')}`)}
   <div class="callout avoid-break">
@@ -1042,39 +1003,16 @@ ${sectionHeader('11', `Master Number${masterList.length > 1 ? 's' : ''} ${master
   ${prose(d.master_numbers)}
 ${closeSectionDiv()}` : ''}
 
-<!-- ════════════════════════════════════════════════════════
-     SECTION 12 — LIFE CYCLES
-════════════════════════════════════════════════════════ -->
 ${sectionHeader('12', `Life Cycles — Pinnacles & Challenges`)}
   <table class="num-table avoid-break">
     <thead>
       <tr><th>Pinnacle</th><th style="text-align:center;">Number</th><th>Period</th><th>Active?</th></tr>
     </thead>
     <tbody>
-      <tr>
-        <td>Pinnacle 1</td>
-        <td class="num-col"><span class="num-badge">${p.pinnacle_1 || '—'}</span></td>
-        <td>${p1Label}</td>
-        <td>${p.current_pinnacle === p.pinnacle_1 && !p.pinnacle_2_start_age ? '✓ Active now' : ''}</td>
-      </tr>
-      <tr>
-        <td>Pinnacle 2</td>
-        <td class="num-col"><span class="num-badge">${p.pinnacle_2 || '—'}</span></td>
-        <td>${p2Label}</td>
-        <td>${p.current_pinnacle === p.pinnacle_2 ? '✓ Active now' : ''}</td>
-      </tr>
-      <tr>
-        <td>Pinnacle 3</td>
-        <td class="num-col"><span class="num-badge">${p.pinnacle_3 || '—'}</span></td>
-        <td>${p3Label}</td>
-        <td>${p.current_pinnacle === p.pinnacle_3 ? '✓ Active now' : ''}</td>
-      </tr>
-      <tr>
-        <td>Pinnacle 4</td>
-        <td class="num-col"><span class="num-badge">${p.pinnacle_4 || '—'}</span></td>
-        <td>${p4Label}</td>
-        <td>${p.current_pinnacle === p.pinnacle_4 ? '✓ Active now' : ''}</td>
-      </tr>
+      <tr><td>Pinnacle 1</td><td class="num-col"><span class="num-badge">${p.pinnacle_1 || '—'}</span></td><td>${p1Label}</td><td>${p.current_pinnacle === p.pinnacle_1 && !p.pinnacle_2_start_age ? '✓ Active now' : ''}</td></tr>
+      <tr><td>Pinnacle 2</td><td class="num-col"><span class="num-badge">${p.pinnacle_2 || '—'}</span></td><td>${p2Label}</td><td>${p.current_pinnacle === p.pinnacle_2 ? '✓ Active now' : ''}</td></tr>
+      <tr><td>Pinnacle 3</td><td class="num-col"><span class="num-badge">${p.pinnacle_3 || '—'}</span></td><td>${p3Label}</td><td>${p.current_pinnacle === p.pinnacle_3 ? '✓ Active now' : ''}</td></tr>
+      <tr><td>Pinnacle 4</td><td class="num-col"><span class="num-badge">${p.pinnacle_4 || '—'}</span></td><td>${p4Label}</td><td>${p.current_pinnacle === p.pinnacle_4 ? '✓ Active now' : ''}</td></tr>
     </tbody>
   </table>
   <table class="num-table avoid-break" style="margin-top:20px;">
@@ -1104,9 +1042,6 @@ ${sectionHeader('12', `Life Cycles — Pinnacles & Challenges`)}
   ${prose(d.life_cycles.life_period)}` : ''}
 ${closeSectionDiv()}
 
-<!-- ════════════════════════════════════════════════════════
-     SECTION 13 — TIMING
-════════════════════════════════════════════════════════ -->
 ${sectionHeader('13', `Current Timing — ${currentYear} and Beyond`)}
   <div class="callout-teal avoid-break">
     <div class="callout-teal-title">Your Numbers Right Now</div>
@@ -1127,9 +1062,6 @@ ${sectionHeader('13', `Current Timing — ${currentYear} and Beyond`)}
   ${prose(d.timing?.year_synthesis)}
 ${closeSectionDiv()}
 
-<!-- ════════════════════════════════════════════════════════
-     SECTION 14 — ACTIVE TRANSITS
-════════════════════════════════════════════════════════ -->
 ${sectionHeader('14', `Active Letter Transits`)}
   <div class="callout-teal avoid-break">
     <div class="callout-teal-title">Your Active Letters Right Now</div>
@@ -1169,9 +1101,6 @@ ${sectionHeader('14', `Active Letter Transits`)}
   ${prose(d.transits?.period_synthesis)}
 ${closeSectionDiv()}
 
-<!-- ════════════════════════════════════════════════════════
-     SECTION 15 — BRIDGE NUMBERS
-════════════════════════════════════════════════════════ -->
 ${sectionHeader('15', `Bridge Numbers — Closing the Gaps`)}
   <div class="insight avoid-break">
     <div class="insight-title">Your Bridge Numbers</div>
@@ -1191,9 +1120,6 @@ ${sectionHeader('15', `Bridge Numbers — Closing the Gaps`)}
   ${renderHowToClose(d.bridge_numbers?.how_to_close)}
 ${closeSectionDiv()}
 
-<!-- ════════════════════════════════════════════════════════
-     SECTION 16 — MATURITY & POWER
-════════════════════════════════════════════════════════ -->
 ${sectionHeader('16', `Maturity & Power — Who You Are Becoming`)}
   <div class="insight avoid-break">
     <div class="insight-title">Looking Ahead</div>
@@ -1210,21 +1136,16 @@ ${sectionHeader('16', `Maturity & Power — Who You Are Becoming`)}
   ${prose(d.maturity_power?.synthesis)}
 ${closeSectionDiv()}
 
-<!-- ════════════════════════════════════════════════════════
-     SECTION 17 — CLOSING SYNTHESIS
-════════════════════════════════════════════════════════ -->
 <div class="closing">
   <div class="closing-title">✦ A Final Word for ${firstName}</div>
   ${prose(d.closing_synthesis, 'closing')}
 </div>
 
-<!-- ════════════════════════════════════════════════════════
-     FOOTER
-════════════════════════════════════════════════════════ -->
 <div class="footer">
   <strong>Occult Pulse</strong> &nbsp;·&nbsp; Complete Chaldean Numerology Reading &nbsp;·&nbsp; Prepared for ${name} &nbsp;·&nbsp; ${genDate}<br>
   This reading is for personal reflection and self-understanding. It does not constitute medical, legal, or financial advice.<br>
   Numerology is a symbolic system of self-inquiry. All interpretations are tendencies, not fixed fates.
+  <div class="footer-ref">Report Reference: {{REPORT_REF_ID}}</div>
 </div>
 
 </body>
@@ -1232,7 +1153,7 @@ ${closeSectionDiv()}
 }
 
 // ────────────────────────────────────────────────────────────
-// BUILD HTML FROM CARDS — UNCHANGED
+// BUILD HTML FROM CARDS — ref ID placeholder added to footer
 // ────────────────────────────────────────────────────────────
 function buildHTMLFromCards(dispatchResult, profile) {
   const name = profile.name_used || profile.name || 'Client';
@@ -1258,14 +1179,18 @@ function buildHTMLFromCards(dispatchResult, profile) {
   <div class="cover-subtitle">${name}</div>
   <hr class="cover-divider"/>
   <div style="color:rgba(255,255,255,0.6);font-size:10pt;">${profile.dob_fmt || ''} &nbsp;·&nbsp; ${genDate}</div>
+  <div class="cover-ref">{{REPORT_REF_ID}}</div>
 </div>
 <div class="page">${cardRows}</div>
-<div class="footer">Occult Pulse &nbsp;·&nbsp; ${genDate} &nbsp;·&nbsp; Chaldean Numerology System</div>
+<div class="footer">
+  Occult Pulse &nbsp;·&nbsp; ${genDate} &nbsp;·&nbsp; Chaldean Numerology System
+  <div class="footer-ref">Report Reference: {{REPORT_REF_ID}}</div>
+</div>
 </body></html>`;
 }
 
 // ────────────────────────────────────────────────────────────
-// FALLBACK HTML — UNCHANGED
+// FALLBACK HTML — ref ID placeholder added to footer
 // ────────────────────────────────────────────────────────────
 function buildFallbackHTML(profile) {
   const name    = profile.name_used || profile.name || 'Client';
@@ -1278,6 +1203,7 @@ function buildFallbackHTML(profile) {
   <div class="cover-brand">✦ Occult Pulse ✦</div>
   <div class="cover-title">Numerology Reading</div>
   <div class="cover-subtitle">${name}</div>
+  <div class="cover-ref">{{REPORT_REF_ID}}</div>
 </div>
 <div class="page">
   <table class="num-table">
@@ -1295,7 +1221,10 @@ function buildFallbackHTML(profile) {
     </tbody>
   </table>
 </div>
-<div class="footer">Occult Pulse &nbsp;·&nbsp; ${genDate} &nbsp;·&nbsp; Chaldean Numerology System</div>
+<div class="footer">
+  Occult Pulse &nbsp;·&nbsp; ${genDate} &nbsp;·&nbsp; Chaldean Numerology System
+  <div class="footer-ref">Report Reference: {{REPORT_REF_ID}}</div>
+</div>
 </body></html>`;
 }
 

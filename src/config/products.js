@@ -10,7 +10,7 @@ const PRODUCTS = {
   full_reading: {
     id:           'full_reading',
     name:         'Complete Numerology Reading',
-    amount_paise: 100,      // ← keep as 100 (₹1) while testing
+    amount_paise: 117900,      // ← keep as 100 (₹1) while testing
                             // change to 117900 (₹1,179) at launch
   },
 };

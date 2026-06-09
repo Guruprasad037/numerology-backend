@@ -677,7 +677,7 @@ function buildPaidHTMLFromClaudeJSON(d, profile) {
     <tr><td class="lbl">Date of Birth</td><td>${dobFmt}</td></tr>
     <tr><td class="lbl">Ruling Planet</td><td>${p.ruling_planet || '—'}</td></tr>
     <tr><td class="lbl">PD Combination</td><td>${p.pd_combination || `${p.psychic_number}-${p.destiny_number}`}</td></tr>
-    <tr><td class="lbl">Numerology System</td><td>Chaldean (Ancient Babylonian)</td></tr>
+    <tr><td class="lbl">Numerology System</td><td>Chaldean</td></tr>
     <tr><td class="lbl">Generated on</td><td>${genDate}</td></tr>
   </table>
   ${masterList.length ? `<div style="margin-top:28px;display:inline-block;background:rgba(183,134,11,0.2);border:1px solid rgba(183,134,11,0.5);padding:8px 20px;">
